@@ -119,9 +119,9 @@ func (t *tester) printStats() {
 	fmt.Printf("%d (%.2f%%) of names redirected to HTTP\n", t.namesHTTPSDisabled, float64(t.namesHTTPSDisabled)/float64(t.totalNames))
 	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, float64(t.namesCertNotUsed)/float64(t.totalNames))
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of certificates were completely unused\n", t.certsUnused, float64(t.certsUnused)/float64(t.totalCerts))
-	fmt.Printf("%d (%.2f%%) of certificates were partially used\n", t.certsPartiallyUsed, float64(t.certsPartiallyUsed)/float64(t.totalCerts))
-	fmt.Printf("%d (%.2f%%) of certificates were totally completely\n", t.certsTotallyUsed, float64(t.certsTotallyUsed)/float64(t.totalCerts))
+	fmt.Printf("%d (%.2f%%) of certificates were unused by all their names\n", t.certsUnused, float64(t.certsUnused)/float64(t.totalCerts))
+	fmt.Printf("%d (%.2f%%) of certificates were partially used by their names\n", t.certsPartiallyUsed, float64(t.certsPartiallyUsed)/float64(t.totalCerts))
+	fmt.Printf("%d (%.2f%%) of certificates were used for all their names\n", t.certsTotallyUsed, float64(t.certsTotallyUsed)/float64(t.totalCerts))
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
@@ -156,7 +156,7 @@ func (t *tester) checkCert(cert *x509.Certificate) {
 }
 
 func (t *tester) begin() {
-	fmt.Println("beginning adoption scan")
+	fmt.Printf("beginning adoption scan [%d certificates, %d names]\n", t.totalCerts, t.totalNames)
 	stop := make(chan bool, 1)
 	go t.printProgress(stop)
 	wg := new(sync.WaitGroup)
