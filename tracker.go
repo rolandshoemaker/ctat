@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,12 @@ import (
 	ct "github.com/jsha/certificatetransparency"
 )
 
+// Used to hide http.Client output we don't want to see
+
+type nullWriter int
+
+func (nullWriter) Write([]byte) (int, error) { return 0, nil }
+
 type testEntry struct {
 	leaf *x509.Certificate
 }
@@ -23,7 +30,7 @@ type testEntry struct {
 type tester struct {
 	totalCerts     int
 	processedCerts int64
-	totalNames     int
+	totalNames     int64
 	processedNames int64
 
 	namesUnavailable   int64
@@ -152,6 +159,7 @@ func (t *tester) begin() {
 	go t.printProgress(stop)
 	wg := new(sync.WaitGroup)
 	started := time.Now()
+	close(t.entries)
 	for i := 0; i < t.workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -166,7 +174,7 @@ func (t *tester) begin() {
 	fmt.Printf("scan finished, took %s\n", time.Since(started))
 }
 
-func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int) {
+func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int64) {
 	pemPublicKey := fmt.Sprintf(`-----BEGIN PUBLIC KEY-----
 %s
 -----END PUBLIC KEY-----`, logKey)
@@ -209,7 +217,7 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 
 	fmt.Printf("filtering local cache for certificates with issuer '%s'\n", issuerFilter)
 	filtered := make(chan *testEntry, sth.Size)
-	numNames := 0
+	numNames := int64(0)
 	entriesFile.Map(func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
 			return
@@ -224,14 +232,15 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 		if time.Now().After(cert.NotAfter) {
 			return
 		}
-		numNames += len(cert.DNSNames)
+		atomic.AddInt64(&numNames, int64(len(cert.DNSNames)))
 		filtered <- &testEntry{leaf: cert}
 	})
-	close(filtered)
 	return filtered, numNames
 }
 
 func main() {
+	log.SetOutput(new(nullWriter))
+
 	logURL := flag.String("logURL", "https://log.certly.io", "url of CT log")
 	logKey := flag.String("logKey", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "base64-encoded CT log key")
 	filename := flag.String("cacheFile", "certly.log", "file in which to cache log data.")
@@ -249,6 +258,7 @@ func main() {
 		}).Dial,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
+	client.Timeout = 10 * time.Second
 	t := tester{
 		entries:    entries,
 		totalCerts: len(entries),
