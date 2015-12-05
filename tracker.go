@@ -81,30 +81,21 @@ func (t *tester) printProgress(stop chan bool) {
 		case <-stop:
 			return
 		default:
-			processedCerts := atomic.LoadInt64(&t.processedCerts)
-			processedNames := atomic.LoadInt64(&t.processedNames)
-			namesUnavailable := atomic.LoadInt64(&t.namesUnavailable)
-			namesHTTPSDisabled := atomic.LoadInt64(&t.namesHTTPSDisabled)
-			namesCertsNotUsed := atomic.LoadInt64(&t.namesCertNotUsed)
-			certsUnused := atomic.LoadInt64(&t.certsUnused)
-			certsPartiallyUsed := atomic.LoadInt64(&t.certsPartiallyUsed)
-			certsTotallyUsed := atomic.LoadInt64(&t.certsTotallyUsed)
-
 			if prog != "" {
 				fmt.Fprintf(os.Stdout, strings.Repeat("\b", len(prog)))
 			}
 			prog = fmt.Sprintf(
 				"%d/%d certificates checked (%d/%d names) names unavailable: %d, names redirected to http: %d, names not using expected cert: %d, unused certificates: %d, partially used certificates: %d, totally used certificates: %d",
-				processedCerts,
+				atomic.LoadInt64(&t.processedCerts),
 				t.totalCerts,
-				processedNames,
+				atomic.LoadInt64(&t.processedNames),
 				t.totalNames,
-				namesUnavailable,
-				namesHTTPSDisabled,
-				namesCertsNotUsed,
-				certsUnused,
-				certsPartiallyUsed,
-				certsTotallyUsed,
+				atomic.LoadInt64(&t.namesUnavailable),
+				atomic.LoadInt64(&t.namesHTTPSDisabled),
+				atomic.LoadInt64(&t.namesCertNotUsed),
+				atomic.LoadInt64(&t.certsUnused),
+				atomic.LoadInt64(&t.certsPartiallyUsed),
+				atomic.LoadInt64(&t.certsTotallyUsed),
 			)
 			fmt.Fprintf(os.Stdout, prog)
 			time.Sleep(time.Second)
