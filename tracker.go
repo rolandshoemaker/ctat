@@ -49,7 +49,7 @@ type result struct {
 }
 
 func (t *tester) processResults(results []result) {
-	unused := 0
+	used := 0
 	for _, r := range results {
 		if !r.hostAvailable {
 			atomic.AddInt64(&t.namesUnavailable, 1)
@@ -63,14 +63,14 @@ func (t *tester) processResults(results []result) {
 			atomic.AddInt64(&t.namesCertNotUsed, 1)
 			continue
 		}
-		unused++
+		used++
 	}
-	if unused == len(results) {
-		atomic.AddInt64(&t.certsUnused, 1)
-	} else if unused < len(results) && unused > 0 {
-		atomic.AddInt64(&t.certsPartiallyUsed, 1)
-	} else if unused == 0 {
+	if used == len(results) {
 		atomic.AddInt64(&t.certsTotallyUsed, 1)
+	} else if used < len(results) && used > 0 {
+		atomic.AddInt64(&t.certsPartiallyUsed, 1)
+	} else if used == 0 {
+		atomic.AddInt64(&t.certsUnused, 1)
 	}
 }
 
