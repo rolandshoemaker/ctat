@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -32,6 +33,8 @@ type tester struct {
 	processedCerts int64
 	totalNames     int64
 	processedNames int64
+
+	progPrintInterval float64
 
 	namesUnavailable   int64
 	namesHTTPSDisabled int64
@@ -83,29 +86,39 @@ func (t *tester) processResults(results []result) {
 
 func (t *tester) printProgress(stop chan bool) {
 	prog := ""
+	processedCertsLast := int64(0)
+	processedNamesLast := int64(0)
 	for {
 		select {
 		case <-stop:
+			fmt.Println()
 			return
 		default:
+			processedCerts := atomic.LoadInt64(&t.processedCerts)
+			processedNames := atomic.LoadInt64(&t.processedNames)
+			newCerts := processedCerts - processedCertsLast
+			newNames := processedNames - processedNamesLast
+			eta := "???"
+			if newNames > 0 {
+				eta = (time.Second * time.Duration((float64(t.totalNames) / (float64(newNames) / t.progPrintInterval)))).String()
+			}
 			if prog != "" {
 				fmt.Fprintf(os.Stdout, strings.Repeat("\b", len(prog)))
 			}
 			prog = fmt.Sprintf(
-				"%d/%d certificates checked (%d/%d names) names unavailable: %d, names redirected to http: %d, names not using expected cert: %d, unused certificates: %d, partially used certificates: %d, totally used certificates: %d",
+				"%d/%d certificates checked, %d/%d names [%.2f cps, %.2f nps, eta: %s]",
 				atomic.LoadInt64(&t.processedCerts),
 				t.totalCerts,
 				atomic.LoadInt64(&t.processedNames),
 				t.totalNames,
-				atomic.LoadInt64(&t.namesUnavailable),
-				atomic.LoadInt64(&t.namesHTTPSDisabled),
-				atomic.LoadInt64(&t.namesCertNotUsed),
-				atomic.LoadInt64(&t.certsUnused),
-				atomic.LoadInt64(&t.certsPartiallyUsed),
-				atomic.LoadInt64(&t.certsTotallyUsed),
+				float64(newCerts)/t.progPrintInterval,
+				float64(newNames)/t.progPrintInterval,
+				eta,
 			)
 			fmt.Fprintf(os.Stdout, prog)
-			time.Sleep(time.Second)
+			time.Sleep(time.Second * time.Duration(t.progPrintInterval))
+			processedCertsLast = processedCerts
+			processedNamesLast = processedNames
 		}
 	}
 }
@@ -113,23 +126,27 @@ func (t *tester) printProgress(stop chan bool) {
 func (t *tester) printStats() {
 	fmt.Println("\n# adoption statistics")
 	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.totalCerts, t.totalNames)
-	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, float64(t.namesUnavailable)/float64(t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names redirected to HTTP\n", t.namesHTTPSDisabled, float64(t.namesHTTPSDisabled)/float64(t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, float64(t.namesCertNotUsed)/float64(t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, (float64(t.namesUnavailable)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names redirected to HTTP\n", t.namesHTTPSDisabled, (float64(t.namesHTTPSDisabled)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, (float64(t.namesCertNotUsed)/float64(t.totalNames))*100.0)
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of certificates were used by none their names\n", t.certsUnused, float64(t.certsUnused)/float64(t.totalCerts))
-	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.certsPartiallyUsed, float64(t.certsPartiallyUsed)/float64(t.totalCerts))
-	fmt.Printf("%d (%.2f%%) of certificates were used by all their names\n", t.certsTotallyUsed, float64(t.certsTotallyUsed)/float64(t.totalCerts))
+	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.certsUnused, (float64(t.certsUnused)/float64(t.totalCerts))*100.0)
+	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.certsPartiallyUsed, (float64(t.certsPartiallyUsed)/float64(t.totalCerts))*100.0)
+	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.certsTotallyUsed, (float64(t.certsTotallyUsed)/float64(t.totalCerts))*100.0)
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	defer atomic.AddInt64(&t.processedNames, 1)
-	resp, err := t.client.Get(fmt.Sprintf("https://%s", dnsName))
+	resp, err := t.client.Head(fmt.Sprintf("https://%s", dnsName))
 	if err != nil {
 		// this should probably retry on some set of errors :/
 		return
 	}
 	defer resp.Body.Close()
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
 	r.hostAvailable = true
 	if resp.TLS == nil {
 		return
@@ -150,23 +167,22 @@ func (t *tester) checkCert(cert *x509.Certificate) {
 	for _, name := range cert.DNSNames {
 		results = append(results, t.checkName(name, fp))
 	}
-	go t.processResults(results)
+	t.processResults(results)
 }
 
 func (t *tester) begin() {
-	fmt.Printf("beginning adoption scan [%d certificates, %d names]\n", t.totalCerts, t.totalNames)
+	fmt.Printf("beginning adoption scan of %d certificates (%d names)\n", t.totalCerts, t.totalNames)
 	stop := make(chan bool, 1)
 	go t.printProgress(stop)
 	wg := new(sync.WaitGroup)
 	started := time.Now()
-	close(t.entries)
 	for i := 0; i < t.workers; i++ {
 		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for te := range t.entries {
 				t.checkCert(te.leaf)
 			}
-			wg.Done()
 		}()
 	}
 	wg.Wait()
@@ -215,7 +231,7 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 	}
 	entriesFile.Seek(0, 0)
 
-	fmt.Printf("filtering local cache for certificates with issuer '%s'\n", issuerFilter)
+	fmt.Printf("filtering local cache for certificates with issuer \"%s\"\n", issuerFilter)
 	filtered := make(chan *testEntry, sth.Size)
 	numNames := int64(0)
 	entriesFile.Map(func(ent *ct.EntryAndPosition, err error) {
@@ -235,6 +251,7 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 		atomic.AddInt64(&numNames, int64(len(cert.DNSNames)))
 		filtered <- &testEntry{leaf: cert}
 	})
+	close(filtered)
 	return filtered, numNames
 }
 
@@ -253,18 +270,19 @@ func main() {
 	client := new(http.Client)
 	client.Transport = &http.Transport{
 		Dial: (&net.Dialer{
-			Timeout:   15 * time.Second, // making lots of calls...
-			KeepAlive: 5 * time.Second,  // requests for similar names *should* be tightly grouped
+			Timeout:   2 * time.Second, // making lots of calls...
+			KeepAlive: 5 * time.Second, // requests for similar names *should* be tightly grouped
 		}).Dial,
-		TLSHandshakeTimeout: 10 * time.Second,
+		TLSHandshakeTimeout: 2 * time.Second,
 	}
-	client.Timeout = 10 * time.Second
+	client.Timeout = 2 * time.Second
 	t := tester{
-		entries:    entries,
-		totalCerts: len(entries),
-		totalNames: numNames,
-		client:     new(http.Client),
-		workers:    *scanners,
+		entries:           entries,
+		totalCerts:        len(entries),
+		totalNames:        numNames,
+		client:            new(http.Client),
+		workers:           *scanners,
+		progPrintInterval: 5.0,
 	}
 	t.begin()
 	t.printStats()
