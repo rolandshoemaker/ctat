@@ -175,7 +175,7 @@ func (t *tester) begin() {
 	fmt.Printf("scan finished, took %s\n", time.Since(started))
 }
 
-func loadAndUpdate(logURL, logKey, filename, issuerFilter string) (chan *testEntry, int) {
+func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int) {
 	pemPublicKey := fmt.Sprintf(`-----BEGIN PUBLIC KEY-----
 %s
 -----END PUBLIC KEY-----`, logKey)
@@ -206,7 +206,7 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string) (chan *testEnt
 		os.Exit(1)
 	}
 	fmt.Printf("local entries: %d, remote entries: %d at %s\n", count, sth.Size, sth.Time.Format(time.ANSIC))
-	if count < sth.Size {
+	if !dontUpdate && count < sth.Size {
 		fmt.Println("updating local cache...")
 		_, err = ctLog.DownloadRange(file, nil, count, sth.Size)
 		if err != nil {
@@ -246,9 +246,10 @@ func main() {
 	filename := flag.String("cacheFile", "certly.log", "file in which to cache log data.")
 	issuerFilter := flag.String("issuerFilter", "Let's Encrypt Authority X1", "common name of issuer to use as a filter")
 	scanners := flag.Int("scanners", 50, "number of scanner workers to run")
+	dontUpdateCache := flag.Bool("dontUpdateCache", false, "don't update the local log cache")
 	flag.Parse()
 
-	entries, numNames := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter)
+	entries, numNames := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter, *dontUpdateCache)
 	client := new(http.Client)
 	client.Transport = &http.Transport{
 		Dial: (&net.Dialer{
