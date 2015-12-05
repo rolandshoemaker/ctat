@@ -30,7 +30,9 @@ type tester struct {
 	namesHTTPSDisabled int64
 	namesCertNotUsed   int64
 
-	certsUnused int64
+	certsUnused        int64
+	certsPartiallyUsed int64
+	certsTotallyUsed   int64
 
 	workers int
 
@@ -47,7 +49,7 @@ type result struct {
 }
 
 func (t *tester) processResults(results []result) {
-	unused := true
+	unused := 0
 	for _, r := range results {
 		if !r.hostAvailable {
 			atomic.AddInt64(&t.namesUnavailable, 1)
@@ -61,12 +63,14 @@ func (t *tester) processResults(results []result) {
 			atomic.AddInt64(&t.namesCertNotUsed, 1)
 			continue
 		}
-		if unused {
-			unused = false
-		}
+		unused++
 	}
-	if unused {
+	if unused == len(results) {
 		atomic.AddInt64(&t.certsUnused, 1)
+	} else if unused < len(results) && unused > 0 {
+		atomic.AddInt64(&t.certsPartiallyUsed, 1)
+	} else if unused == 0 {
+		atomic.AddInt64(&t.certsTotallyUsed, 1)
 	}
 }
 
@@ -83,12 +87,14 @@ func (t *tester) printProgress(stop chan bool) {
 			namesHTTPSDisabled := atomic.LoadInt64(&t.namesHTTPSDisabled)
 			namesCertsNotUsed := atomic.LoadInt64(&t.namesCertNotUsed)
 			certsUnused := atomic.LoadInt64(&t.certsUnused)
+			certsPartiallyUsed := atomic.LoadInt64(&t.certsPartiallyUsed)
+			certsTotallyUsed := atomic.LoadInt64(&t.certsTotallyUsed)
 
 			if prog != "" {
 				fmt.Fprintf(os.Stdout, strings.Repeat("\b", len(prog)))
 			}
 			prog = fmt.Sprintf(
-				"%d/%d certificates checked (%d/%d names) names unavailable: %d, names redirected to http: %d, names not using expected cert: %d, unused certificates: %d",
+				"%d/%d certificates checked (%d/%d names) names unavailable: %d, names redirected to http: %d, names not using expected cert: %d, unused certificates: %d, partially used certificates: %d, totally used certificates: %d",
 				processedCerts,
 				t.totalCerts,
 				processedNames,
@@ -97,6 +103,8 @@ func (t *tester) printProgress(stop chan bool) {
 				namesHTTPSDisabled,
 				namesCertsNotUsed,
 				certsUnused,
+				certsPartiallyUsed,
+				certsTotallyUsed,
 			)
 			fmt.Fprintf(os.Stdout, prog)
 			time.Sleep(time.Second)
