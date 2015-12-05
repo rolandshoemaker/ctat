@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/x509"
+	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -220,7 +221,14 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string) (chan *testEnt
 }
 
 func main() {
-	entries, numNames := loadAndUpdate("https://log.certly.io", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "certly.log", "Let's Encrypt Authority X1")
+	logURL := flag.String("logURL", "https://log.certly.io", "url of CT log")
+	logKey := flag.String("logKey", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "base64-encoded CT log key")
+	filename := flag.String("cacheFile", "certly.log", "file in which to cache log data.")
+	issuerFilter := flag.String("issuerFilter", "Let's Encrypt Authority X1", "common name of issuer to use as a filter")
+	scanners := flag.Int("scanners", 50, "number of scanner workers to run")
+	flag.Parse()
+
+	entries, numNames := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter)
 	client := new(http.Client)
 	client.Transport = &http.Transport{
 		Dial: (&net.Dialer{
@@ -234,7 +242,7 @@ func main() {
 		totalCerts: len(entries),
 		totalNames: numNames,
 		client:     new(http.Client),
-		workers:    50,
+		workers:    *scanners,
 	}
 	t.begin()
 }
