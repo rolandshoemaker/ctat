@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -35,8 +36,6 @@ type tester struct {
 	entries chan *testEntry
 
 	client *http.Client
-
-	expectedChainLength int
 }
 
 type result struct {
@@ -140,6 +139,7 @@ func (t *tester) begin() {
 	stop := make(chan bool, 1)
 	go t.printProgress(stop)
 	wg := new(sync.WaitGroup)
+	started := time.Now()
 	for i := 0; i < t.workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -151,6 +151,7 @@ func (t *tester) begin() {
 	}
 	wg.Wait()
 	stop <- true
+	fmt.Printf("scan finished, took %s\n", time.Since(started))
 }
 
 func loadAndUpdate(logURL, logKey, filename, issuerFilter string) (chan *testEntry, int) {
@@ -220,6 +221,14 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string) (chan *testEnt
 
 func main() {
 	entries, numNames := loadAndUpdate("https://log.certly.io", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "certly.log", "Let's Encrypt Authority X1")
+	client := new(http.Client)
+	client.Transport = &http.Transport{
+		Dial: (&net.Dialer{
+			Timeout:   15 * time.Second, // making lots of calls...
+			KeepAlive: 5 * time.Second,  // requests for similar names *should* be tightly grouped
+		}).Dial,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
 	t := tester{
 		entries:    entries,
 		totalCerts: len(entries),
