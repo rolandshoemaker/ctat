@@ -28,9 +28,11 @@ type tester struct {
 
 	progPrintInterval float64
 
-	namesUnavailable   int64
-	namesHTTPSDisabled int64
-	namesCertNotUsed   int64
+	namesUnavailable      int64
+	namesHTTPSDisabled    int64
+	namesTLSError         int64
+	namesUsingInvalidCert int64
+	namesCertNotUsed      int64
 
 	certsUnused        int64
 	certsPartiallyUsed int64
@@ -68,6 +70,14 @@ func (t *tester) processResults(results []result) {
 		}
 		if !r.httpsEnabled {
 			atomic.AddInt64(&t.namesHTTPSDisabled, 1)
+			continue
+		}
+		if r.tlsError {
+			atomic.AddInt64(&t.namesTLSError, 1)
+			continue
+		}
+		if r.usingInvalidCert {
+			atomic.AddInt64(&t.namesUsingInvalidCert, 1)
 			continue
 		}
 		if !r.certUsed {
@@ -127,7 +137,8 @@ func (t *tester) printStats() {
 	fmt.Println("\n# adoption statistics")
 	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.totalCerts, t.totalNames)
 	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, (float64(t.namesUnavailable)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names redirected to HTTP\n", t.namesHTTPSDisabled, (float64(t.namesHTTPSDisabled)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS\n", t.namesHTTPSDisabled, (float64(t.namesHTTPSDisabled)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names threw a TLS error\n", t.namesTLSError, (float64(t.namesTLSError)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, (float64(t.namesCertNotUsed)/float64(t.totalNames))*100.0)
 	fmt.Println()
 	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.certsUnused, (float64(t.certsUnused)/float64(t.totalCerts))*100.0)
@@ -168,6 +179,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 			return
 		}
 		// this should really break down the "x509: " errors more, not-trusted/wrong name/expired etc...
+		// can use the x509.XXXError types to easily(ish) check this!
 		r.usingInvalidCert = true
 		return
 	}
