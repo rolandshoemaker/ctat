@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -48,22 +47,28 @@ type tester struct {
 
 	entries chan *testEntry
 
-	client *http.Client
+	dialerTimeout time.Duration
 
 	debug             bool
 	dontPrintProgress bool
 }
 
 type result struct {
-	hostAvailable bool
-	httpsEnabled  bool
-	certUsed      bool
-	properlySetup bool
+	skipped          bool
+	hostAvailable    bool
+	httpsEnabled     bool
+	tlsError         bool
+	usingInvalidCert bool
+	certUsed         bool
+	properlySetup    bool
 }
 
 func (t *tester) processResults(results []result) {
 	used := 0
 	for _, r := range results {
+		if r.skipped {
+			continue
+		}
 		if !r.hostAvailable {
 			atomic.AddInt64(&t.namesUnavailable, 1)
 			continue
@@ -139,13 +144,39 @@ func (t *tester) printStats() {
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	defer atomic.AddInt64(&t.processedNames, 1)
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: t.dialerTimeout}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
 	if err != nil {
-		// this should probably retry on some set of errors :/
-		// it should also check the error since this provides useful information beyond 'unavailable'
+		// this should probably retry on some set of errors :/		// it should also check the error since this provides useful information beyond 'unavailable'
 		if t.debug {
-			fmt.Printf("Connection failed for [%s]: %s\n", dnsName, err)
+			fmt.Printf("Connection to [%s] failed: %s\n", dnsName, err)
 		}
+		// Check if the error failed because connection was refused / timed out / DNS broke
+		if netErr, ok := err.(*net.OpError); ok {
+			if netErr.Timeout() || netErr.Temporary() {
+				r.skipped = true
+			}
+			if dnsErr, ok := netErr.Err.(*net.DNSError); ok {
+				if dnsErr.Timeout() || dnsErr.Temporary() {
+					r.skipped = true
+				}
+			}
+			// Hosts that don't serve HTTPS are marked unavailable (this should be noted elsewhere...)
+			return
+		}
+		r.hostAvailable = true
+		if err.Error() == "EOF" {
+			// ??? (maybe this indicates not serving HTTPS in some situations? idk)
+			return
+		}
+		r.httpsEnabled = true
+		// Check if the error was TLS related
+		if strings.HasPrefix(err.Error(), "tls:") {
+			r.tlsError = true
+			return
+		}
+		// this should really break down the "x509: " errors more, not-trusted/wrong name/expired etc...
+		r.usingInvalidCert = true
+		fmt.Printf("DERDERP: %s\n", err)
 		return
 	}
 	r.hostAvailable = true
@@ -282,6 +313,7 @@ func main() {
 		progPrintInterval: 5.0,
 		debug:             *debug,
 		dontPrintProgress: *dontPrintProgress,
+		dialerTimeout:     time.Second * 5,
 	}
 	t.begin()
 	t.printStats()
