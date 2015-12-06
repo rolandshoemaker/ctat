@@ -2,10 +2,10 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -49,6 +49,9 @@ type tester struct {
 	entries chan *testEntry
 
 	client *http.Client
+
+	debug             bool
+	dontPrintProgress bool
 }
 
 type result struct {
@@ -137,22 +140,23 @@ func (t *tester) printStats() {
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	defer atomic.AddInt64(&t.processedNames, 1)
-	resp, err := t.client.Head(fmt.Sprintf("https://%s", dnsName))
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
 	if err != nil {
 		// this should probably retry on some set of errors :/
-		return
-	}
-	defer resp.Body.Close()
-	_, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
+		// it should also check the error since this provides useful information beyond ''unavailable'
+		if t.debug {
+			fmt.Printf("Connection failed for [%s]: %s\n", dnsName, err)
+		}
 		return
 	}
 	r.hostAvailable = true
-	if resp.TLS == nil {
+	defer conn.Close()
+	state := conn.ConnectionState()
+	if !state.HandshakeComplete {
 		return
 	}
 	r.httpsEnabled = true
-	for _, peer := range resp.TLS.PeerCertificates {
+	for _, peer := range state.PeerCertificates {
 		if sha256.Sum256(peer.Raw) != expectedFP {
 			r.certUsed = true
 		}
@@ -173,7 +177,9 @@ func (t *tester) checkCert(cert *x509.Certificate) {
 func (t *tester) begin() {
 	fmt.Printf("beginning adoption scan of %d certificates (%d names)\n", t.totalCerts, t.totalNames)
 	stop := make(chan bool, 1)
-	go t.printProgress(stop)
+	if !t.debug && !t.dontPrintProgress {
+		go t.printProgress(stop)
+	}
 	wg := new(sync.WaitGroup)
 	started := time.Now()
 	for i := 0; i < t.workers; i++ {
@@ -264,25 +270,19 @@ func main() {
 	issuerFilter := flag.String("issuerFilter", "Let's Encrypt Authority X1", "common name of issuer to use as a filter")
 	scanners := flag.Int("scanners", 50, "number of scanner workers to run")
 	dontUpdateCache := flag.Bool("dontUpdateCache", false, "don't update the local log cache")
+	debug := flag.Bool("debug", false, "print lots of error messages")
+	dontPrintProgress := flag.Bool("dontPrintProgress", false, "don't print progress information")
 	flag.Parse()
 
 	entries, numNames := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter, *dontUpdateCache)
-	client := new(http.Client)
-	client.Transport = &http.Transport{
-		Dial: (&net.Dialer{
-			Timeout:   2 * time.Second, // making lots of calls...
-			KeepAlive: 5 * time.Second, // requests for similar names *should* be tightly grouped
-		}).Dial,
-		TLSHandshakeTimeout: 2 * time.Second,
-	}
-	client.Timeout = 2 * time.Second
 	t := tester{
 		entries:           entries,
 		totalCerts:        len(entries),
 		totalNames:        numNames,
-		client:            new(http.Client),
 		workers:           *scanners,
 		progPrintInterval: 5.0,
+		debug:             *debug,
+		dontPrintProgress: *dontPrintProgress,
 	}
 	t.begin()
 	t.printStats()
