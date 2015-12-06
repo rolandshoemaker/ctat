@@ -139,6 +139,7 @@ func (t *tester) printStats() {
 	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, (float64(t.namesUnavailable)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS\n", t.namesHTTPSDisabled, (float64(t.namesHTTPSDisabled)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names threw a TLS error\n", t.namesTLSError, (float64(t.namesTLSError)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names used an invalid certificate\n", t.namesUsingInvalidCert, (float64(t.namesUsingInvalidCert)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, (float64(t.namesCertNotUsed)/float64(t.totalNames))*100.0)
 	fmt.Println()
 	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.certsUnused, (float64(t.certsUnused)/float64(t.totalCerts))*100.0)
