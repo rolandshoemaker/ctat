@@ -94,7 +94,6 @@ func (t *tester) printProgress(stop chan bool) {
 	for {
 		select {
 		case <-stop:
-			fmt.Println()
 			return
 		default:
 			processedCerts := atomic.LoadInt64(&t.processedCerts)
@@ -143,7 +142,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
 	if err != nil {
 		// this should probably retry on some set of errors :/
-		// it should also check the error since this provides useful information beyond ''unavailable'
+		// it should also check the error since this provides useful information beyond 'unavailable'
 		if t.debug {
 			fmt.Printf("Connection failed for [%s]: %s\n", dnsName, err)
 		}
@@ -193,7 +192,7 @@ func (t *tester) begin() {
 	}
 	wg.Wait()
 	stop <- true
-	fmt.Printf("scan finished, took %s\n", time.Since(started))
+	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
 
 func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int64) {
