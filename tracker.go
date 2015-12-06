@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
@@ -16,12 +15,6 @@ import (
 
 	ct "github.com/jsha/certificatetransparency"
 )
-
-// Used to hide http.Client output we don't want to see
-
-type nullWriter int
-
-func (nullWriter) Write([]byte) (int, error) { return 0, nil }
 
 type testEntry struct {
 	leaf *x509.Certificate
@@ -176,7 +169,6 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 		}
 		// this should really break down the "x509: " errors more, not-trusted/wrong name/expired etc...
 		r.usingInvalidCert = true
-		fmt.Printf("DERDERP: %s\n", err)
 		return
 	}
 	r.hostAvailable = true
@@ -292,8 +284,6 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 }
 
 func main() {
-	log.SetOutput(new(nullWriter))
-
 	logURL := flag.String("logURL", "https://log.certly.io", "url of CT log")
 	logKey := flag.String("logKey", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "base64-encoded CT log key")
 	filename := flag.String("cacheFile", "certly.log", "file in which to cache log data.")
@@ -302,6 +292,7 @@ func main() {
 	dontUpdateCache := flag.Bool("dontUpdateCache", false, "don't update the local log cache")
 	debug := flag.Bool("debug", false, "print lots of error messages")
 	dontPrintProgress := flag.Bool("dontPrintProgress", false, "don't print progress information")
+	scannerTimeout := flag.Duration("scannerTimeout", time.Second*5, "dialer timeout for the tls scanners (uses golang duration format, e.g. 5s)")
 	flag.Parse()
 
 	entries, numNames := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter, *dontUpdateCache)
@@ -313,7 +304,7 @@ func main() {
 		progPrintInterval: 5.0,
 		debug:             *debug,
 		dontPrintProgress: *dontPrintProgress,
-		dialerTimeout:     time.Second * 5,
+		dialerTimeout:     *scannerTimeout,
 	}
 	t.begin()
 	t.printStats()
