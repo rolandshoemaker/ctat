@@ -117,7 +117,7 @@ func (t *tester) printProgress(stop chan bool) {
 				eta = (time.Second * time.Duration((float64(t.totalNames) / (float64(newNames) / t.progPrintInterval)))).String()
 			}
 			if prog != "" {
-				fmt.Fprintf(os.Stdout, strings.Repeat("\b", len(prog)))
+				fmt.Fprintf(os.Stdout, fmt.Sprintf("\033[1K\033[%dD", len(prog)))
 			}
 			prog = fmt.Sprintf(
 				"%d/%d certificates checked, %d/%d names [%.2f cps, %.2f nps, eta: %s]",
