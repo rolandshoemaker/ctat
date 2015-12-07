@@ -229,8 +229,9 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	}
 	r.httpsEnabled = true
 	for _, peer := range state.PeerCertificates {
-		if sha256.Sum256(peer.Raw) != expectedFP {
+		if sha256.Sum256(peer.Raw) == expectedFP {
 			r.certUsed = true
+			break
 		}
 	}
 	return
