@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -28,6 +29,7 @@ type tester struct {
 
 	progPrintInterval float64
 
+	namesSkipped          int64
 	namesUnavailable      int64
 	namesHTTPSDisabled    int64
 	namesTLSError         int64
@@ -62,6 +64,8 @@ func (t *tester) processResults(results []result) {
 	used := 0
 	for _, r := range results {
 		if r.skipped {
+
+			atomic.AddInt64(&t.namesSkipped, 1)
 			continue
 		}
 		if !r.hostAvailable {
@@ -136,9 +140,10 @@ func (t *tester) printProgress(stop chan bool) {
 func (t *tester) printStats() {
 	fmt.Println("\n# adoption statistics")
 	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.totalCerts, t.totalNames)
+	fmt.Printf("%d (%.2f%%) of names skipped\n", t.namesSkipped, (float64(t.namesSkipped)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, (float64(t.namesUnavailable)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS\n", t.namesHTTPSDisabled, (float64(t.namesHTTPSDisabled)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names threw a TLS error\n", t.namesTLSError, (float64(t.namesTLSError)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names threw a TLS handshake error\n", t.namesTLSError, (float64(t.namesTLSError)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names used an invalid certificate\n", t.namesUsingInvalidCert, (float64(t.namesUsingInvalidCert)/float64(t.totalNames))*100.0)
 	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, (float64(t.namesCertNotUsed)/float64(t.totalNames))*100.0)
 	fmt.Println()
@@ -147,11 +152,43 @@ func (t *tester) printStats() {
 	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.certsTotallyUsed, (float64(t.certsTotallyUsed)/float64(t.totalCerts))*100.0)
 }
 
+type jsonResults struct {
+	Timestamp time.Time
+
+	TotalNames int64
+	TotalCerts int64
+
+	NamesSkipped          int64
+	NamesUnavailable      int64
+	NamesHTTPSDisabled    int64
+	NamesTLSError         int64
+	NamesUsingInvalidCert int64
+	NamesCertNotUsed      int64
+
+	CertsUnused        int64
+	CertsPartiallyUsed int64
+	CertsTotallyUsed   int64
+}
+
+func (t *tester) saveStats(filename string) error {
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	data, err := json.Marshal(jsonResults{})
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(string(data))
+	return err
+}
+
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	defer atomic.AddInt64(&t.processedNames, 1)
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: t.dialerTimeout}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
 	if err != nil {
-		// this should probably retry on some set of errors :/		// it should also check the error since this provides useful information beyond 'unavailable'
+		// this should probably retry on some set of errors :/
 		if t.debug {
 			fmt.Printf("Connection to [%s] failed: %s\n", dnsName, err)
 		}
