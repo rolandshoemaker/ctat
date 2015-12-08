@@ -23,3 +23,4 @@ default issuer common name filter also reflects this).
 * Cleanup the blob of results vars on `tester`, most likely move them to their own struct
   so we can implement a `Marshal` method for it
 * Cleanup many... things
+
