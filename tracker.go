@@ -366,6 +366,26 @@ func (t *tester) begin() {
 	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
 
+func basicFilter(issuerFilter string, checkOCSP bool, ent *ct.EntryAndPosition, err error) *x509.Certificate {
+	if err != nil {
+		return nil
+	}
+	cert, err := x509.ParseCertificate(ent.Entry.X509Cert)
+	if err != nil {
+		return nil
+	}
+	if cert.Issuer.CommonName != issuerFilter {
+		return nil
+	}
+	if time.Now().After(cert.NotAfter) {
+		return nil
+	}
+	if checkOCSP {
+		// do something
+	}
+	return cert
+}
+
 func (t *tester) filterOnIssuer(issuerFilter string) func(*ct.EntryAndPosition, error) {
 	return func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
@@ -381,8 +401,10 @@ func (t *tester) filterOnIssuer(issuerFilter string) func(*ct.EntryAndPosition, 
 		if time.Now().After(cert.NotAfter) {
 			return
 		}
-		atomic.AddInt64(&t.totalNames, int64(len(cert.DNSNames)))
-		t.entries <- cert
+		if cert := basicFilter(issuerFilter, false, ent, err); cert != nil {
+			atomic.AddInt64(&t.totalNames, int64(len(cert.DNSNames)))
+			t.entries <- cert
+		}
 	}
 }
 
@@ -390,17 +412,8 @@ func (t *tester) filterOnIssuerAndDedup(issuerFilter string) (func(*ct.EntryAndP
 	ddMap := make(map[string]*x509.Certificate)
 	ddMu := new(sync.Mutex)
 	return func(ent *ct.EntryAndPosition, err error) {
-			if err != nil {
-				return
-			}
-			cert, err := x509.ParseCertificate(ent.Entry.X509Cert)
-			if err != nil {
-				return
-			}
-			if cert.Issuer.CommonName != issuerFilter {
-				return
-			}
-			if time.Now().After(cert.NotAfter) {
+			cert := basicFilter(issuerFilter, false, ent, err)
+			if cert == nil {
 				return
 			}
 			names := cert.DNSNames
