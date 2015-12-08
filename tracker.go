@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,13 +20,14 @@ import (
 type collectedResults struct {
 	NamesSkipped              int64
 	NamesUnavailable          int64
-	NamesHTTPSDisabled        int64
 	NamesTLSError             int64
 	NamesUsingMiscInvalidCert int64
 	NamesUsingExpiredCert     int64
 	NamesUsingIncompleteChain int64
 	NamesUsingWrongCert       int64
 	NamesUsingSelfSignedCert  int64
+	NamesWithOCSPStapled      int64
+	NamesServingSCTs          int64
 	NamesCertNotUsed          int64
 
 	CertsUnused        int64
@@ -55,7 +57,6 @@ type tester struct {
 type result struct {
 	skipped              bool
 	hostAvailable        bool
-	httpsEnabled         bool
 	tlsError             bool
 	usingMiscInvalidCert bool
 	usingExpiredCert     bool
@@ -63,7 +64,8 @@ type result struct {
 	usingWrongCert       bool
 	usingSelfSignedCert  bool
 	certUsed             bool
-	properlySetup        bool
+	ocspStapled          bool
+	servesSCTs           bool
 }
 
 func (t *tester) processResults(results []result) {
@@ -76,10 +78,6 @@ func (t *tester) processResults(results []result) {
 		}
 		if !r.hostAvailable {
 			atomic.AddInt64(&t.results.NamesUnavailable, 1)
-			continue
-		}
-		if !r.httpsEnabled {
-			atomic.AddInt64(&t.results.NamesHTTPSDisabled, 1)
 			continue
 		}
 		if r.tlsError {
@@ -105,6 +103,12 @@ func (t *tester) processResults(results []result) {
 		if !r.certUsed {
 			atomic.AddInt64(&t.results.NamesCertNotUsed, 1)
 			continue
+		}
+		if r.ocspStapled {
+			atomic.AddInt64(&t.results.NamesWithOCSPStapled, 1)
+		}
+		if r.servesSCTs {
+			atomic.AddInt64(&t.results.NamesServingSCTs, 1)
 		}
 		used++
 	}
@@ -161,23 +165,24 @@ func percent(n, t int64) float64 {
 
 func (t *tester) printStats() {
 	fmt.Println("\n# adoption statistics")
-	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.totalCerts, t.totalNames)
+	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.processedCerts, t.processedNames)
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of names skipped\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS (inaccurate, fix!)\n", t.results.NamesHTTPSDisabled, percent(t.results.NamesHTTPSDisabled, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names threw a TLS handshake error\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names sent a incomplete chain\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a expired certificate\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a self signed certificate\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a certificate for names that didn't match\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a misc. invalid certificate\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.totalNames))
+	fmt.Printf("%d (%.2f%%) names skipped\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names couldn't be connected to\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names threw a TLS handshake error\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names sent a incomplete chain\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names used a expired certificate\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names used a self signed certificate\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names used a certificate for names that didn't match\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names used a invalid certificate (misc. reasons)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names didn't use their certificate\n", t.results.NamesCertNotUsed, percent(t.results.NamesCertNotUsed, t.processedNames))
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of names didn't use their certificate\n", t.results.NamesCertNotUsed, percent(t.results.NamesCertNotUsed, t.totalNames))
+	fmt.Printf("%d (%.2f%%) names had a stapled OCSP response\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.processedNames))
+	fmt.Printf("%d (%.2f%%) names served SCT receipts\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.processedNames))
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.totalCerts)))
-	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.totalCerts)))
-	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.totalCerts)))
+	fmt.Printf("%d (%.2f%%) certificates were used by none of their names\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
+	fmt.Printf("%d (%.2f%%) certificates were used by some of their names\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
+	fmt.Printf("%d (%.2f%%) certificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
@@ -202,7 +207,6 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 			return
 		}
 		r.hostAvailable = true
-		r.httpsEnabled = true
 		// Check if the error was TLS related
 		if strings.HasPrefix(err.Error(), "tls:") || err.Error() == "EOF" {
 			r.tlsError = true
@@ -234,12 +238,17 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	if !state.HandshakeComplete {
 		return
 	}
-	r.httpsEnabled = true
 	for _, peer := range state.PeerCertificates {
 		if sha256.Sum256(peer.Raw) == expectedFP {
 			r.certUsed = true
 			break
 		}
+	}
+	if len(state.OCSPResponse) != 0 {
+		r.ocspStapled = true
+	}
+	if len(state.SignedCertificateTimestamps) != 0 {
+		r.servesSCTs = true
 	}
 	return
 }
@@ -256,23 +265,41 @@ func (t *tester) checkCert(cert *x509.Certificate) {
 
 func (t *tester) begin() {
 	fmt.Printf("beginning adoption scan of %d certificates (%d names)\n", t.totalCerts, t.totalNames)
-	stop := make(chan bool, 1)
+	stopProg := make(chan bool, 1)
 	if !t.debug && !t.dontPrintProgress {
-		go t.printProgress(stop)
+		go t.printProgress(stopProg)
 	}
 	wg := new(sync.WaitGroup)
 	started := time.Now()
+	stopWorkers := []chan bool{}
 	for i := 0; i < t.workers; i++ {
+		stop := make(chan bool, 1)
+		stopWorkers = append(stopWorkers, stop)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for te := range t.entries {
-				t.checkCert(te)
+				select {
+				case <-stop:
+					return
+				default:
+					t.checkCert(te)
+				}
 			}
 		}()
 	}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	go func() {
+		<-sigChan
+		stopProg <- true
+		fmt.Println("\n\ninterrupted, cleaning up")
+		for _, sw := range stopWorkers {
+			sw <- true
+		}
+	}()
 	wg.Wait()
-	stop <- true
+	stopProg <- true
 	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
 
@@ -348,7 +375,7 @@ func (t *tester) loadAndUpdate(logURL, logKey, filename string, dontUpdate bool,
 }
 
 func main() {
-	logURL := flag.String("logURL", "https://log.certly.io", "url of CT log")
+	logURL := flag.String("logURL", "https://log.certly.io", "url of remote CT log to use")
 	logKey := flag.String("logKey", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "base64-encoded CT log key")
 	filename := flag.String("cacheFile", "certly.log", "file in which to cache log data.")
 	issuerFilter := flag.String("issuerFilter", "Let's Encrypt Authority X1", "common name of issuer to use as a filter")
@@ -370,7 +397,7 @@ func main() {
 	err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, t.filterOnIssuer(*issuerFilter))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load, update, and filter the local CT cache file: %s\n", err)
-		return
+		os.Exit(1)
 	}
 
 	t.begin()
