@@ -17,6 +17,7 @@ import (
 	"time"
 
 	ct "github.com/jsha/certificatetransparency"
+	"golang.org/x/crypto/ocsp"
 )
 
 var suiteToString = map[uint16]string{
@@ -59,6 +60,11 @@ type collectedResults struct {
 	CipherHist map[string]int64
 }
 
+type workUnit struct {
+	cert *x509.Certificate
+	ocsp *ocsp.Response
+}
+
 type tester struct {
 	// progress stuff
 	totalCerts        int
@@ -71,7 +77,7 @@ type tester struct {
 	// important stuff
 	results       collectedResults
 	workers       int
-	entries       chan *x509.Certificate
+	entries       chan *workUnit
 	dialerTimeout time.Duration
 
 	// misc
@@ -227,9 +233,9 @@ func (t *tester) printStats() {
 
 	fmt.Printf("\t# adoption statistics\n\n")
 	fmt.Fprintf(w, "\tnames using issued cert\t%d\t(%.2f%%)\n", t.processedNames-t.results.NamesCertNotUsed, percent(t.processedNames-t.results.NamesCertNotUsed, t.processedNames))
-	fmt.Fprintf(w, "\tcerts used by no names\t%d\t(%.2f%%)\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
-	fmt.Fprintf(w, "\tcerts used by some names\t%d\t(%.2f%%)\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
 	fmt.Fprintf(w, "\tcerts used by all names\t%d\t(%.2f%%)\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\tcerts used by some names\t%d\t(%.2f%%)\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\tcerts used by no names\t%d\t(%.2f%%)\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
 	fmt.Fprintln(w)
 	w.Flush()
 
@@ -239,7 +245,7 @@ func (t *tester) printStats() {
 		cipherNum += v
 	}
 	for k, v := range t.results.CipherHist {
-		fmt.Fprintf(w, "\t%d\t(%.2f%%)\t%s\n", v, percent(v, cipherNum), k)
+		fmt.Fprintf(w, "\t%s\t%d\t(%.2f%%)\n", k, v, percent(v, cipherNum))
 	}
 	fmt.Fprintln(w)
 	w.Flush()
@@ -326,7 +332,7 @@ func (t *tester) checkCert(cert *x509.Certificate) {
 }
 
 func (t *tester) begin() {
-	fmt.Printf("beginning adoption scan of %d certificates (%d names)\n", t.totalCerts, t.totalNames)
+	fmt.Printf("beginning scan of %d certificates (%d names)\n", t.totalCerts, t.totalNames)
 	stopProg := make(chan bool, 1)
 	if !t.debug && !t.dontPrintProgress {
 		go t.printProgress(stopProg)
@@ -345,7 +351,7 @@ func (t *tester) begin() {
 				case <-stop:
 					return
 				default:
-					t.checkCert(te)
+					t.checkCert(te.cert)
 				}
 			}
 		}()
@@ -366,53 +372,41 @@ func (t *tester) begin() {
 	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
 
-func basicFilter(issuerFilter string, checkOCSP bool, ent *ct.EntryAndPosition, err error) *x509.Certificate {
+func basicFilter(issuerFilter string, checkOCSP bool, ent *ct.EntryAndPosition, err error) (*x509.Certificate, *ocsp.Response) {
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	cert, err := x509.ParseCertificate(ent.Entry.X509Cert)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	if cert.Issuer.CommonName != issuerFilter {
-		return nil
+		return nil, nil
 	}
 	if time.Now().After(cert.NotAfter) {
-		return nil
+		return nil, nil
 	}
+	var ocspResp *ocsp.Response
 	if checkOCSP {
 		// do something
 	}
-	return cert
+	return cert, ocspResp
 }
 
 func (t *tester) filterOnIssuer(issuerFilter string) func(*ct.EntryAndPosition, error) {
 	return func(ent *ct.EntryAndPosition, err error) {
-		if err != nil {
-			return
-		}
-		cert, err := x509.ParseCertificate(ent.Entry.X509Cert)
-		if err != nil {
-			return
-		}
-		if cert.Issuer.CommonName != issuerFilter {
-			return
-		}
-		if time.Now().After(cert.NotAfter) {
-			return
-		}
-		if cert := basicFilter(issuerFilter, false, ent, err); cert != nil {
+		if cert, ocspResp := basicFilter(issuerFilter, false, ent, err); cert != nil {
 			atomic.AddInt64(&t.totalNames, int64(len(cert.DNSNames)))
-			t.entries <- cert
+			t.entries <- &workUnit{cert: cert, ocsp: ocspResp}
 		}
 	}
 }
 
 func (t *tester) filterOnIssuerAndDedup(issuerFilter string) (func(*ct.EntryAndPosition, error), func()) {
-	ddMap := make(map[string]*x509.Certificate)
+	ddMap := make(map[string]*workUnit)
 	ddMu := new(sync.Mutex)
 	return func(ent *ct.EntryAndPosition, err error) {
-			cert := basicFilter(issuerFilter, false, ent, err)
+			cert, ocspResp := basicFilter(issuerFilter, false, ent, err)
 			if cert == nil {
 				return
 			}
@@ -421,19 +415,19 @@ func (t *tester) filterOnIssuerAndDedup(issuerFilter string) (func(*ct.EntryAndP
 			sortedNames := strings.Join(names, ",")
 			ddMu.Lock()
 			if oldCert, present := ddMap[sortedNames]; present {
-				if cert.NotAfter.After(oldCert.NotAfter) {
-					ddMap[sortedNames] = cert
+				if cert.NotAfter.After(oldCert.cert.NotAfter) {
+					ddMap[sortedNames] = &workUnit{cert: cert, ocsp: ocspResp}
 				}
 			} else {
-				ddMap[sortedNames] = cert
+				ddMap[sortedNames] = &workUnit{cert: cert, ocsp: ocspResp}
 			}
 			ddMu.Unlock()
 		}, func() {
 			ddMu.Lock()
 			defer ddMu.Unlock()
-			for _, c := range ddMap {
-				atomic.AddInt64(&t.totalNames, int64(len(c.DNSNames)))
-				t.entries <- c
+			for _, wu := range ddMap {
+				atomic.AddInt64(&t.totalNames, int64(len(wu.cert.DNSNames)))
+				t.entries <- wu
 			}
 		}
 }
@@ -479,13 +473,8 @@ func (t *tester) loadAndUpdate(logURL, logKey, filename string, dontUpdate bool,
 	entriesFile.Seek(0, 0)
 
 	fmt.Println("filtering local cache")
-	t.entries = make(chan *x509.Certificate, sth.Size)
+	t.entries = make(chan *workUnit, sth.Size)
 	entriesFile.Map(filterFunc)
-	if len(t.entries) == 0 {
-		return fmt.Errorf("filtered list contains no certificates!")
-	}
-	close(t.entries)
-	t.totalCerts = len(t.entries)
 	return nil
 }
 
@@ -499,7 +488,13 @@ func main() {
 	debug := flag.Bool("debug", false, "print lots of error messages")
 	dontPrintProgress := flag.Bool("dontPrintProgress", false, "don't print progress information")
 	scannerTimeout := flag.Duration("scannerTimeout", time.Second*5, "dialer timeout for the tls scanners (uses golang duration format, e.g. 5s)")
+	filter := flag.String("filter", "issuer", "how to filter the CT cache")
 	flag.Parse()
+
+	if *filter != "issuer" && *filter != "issuerDeduped" {
+		fmt.Fprintf(os.Stderr, "incorrect filter type\n")
+		os.Exit(1)
+	}
 
 	t := tester{
 		workers:           *scanners,
@@ -513,11 +508,28 @@ func main() {
 		},
 	}
 
-	err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, t.filterOnIssuer(*issuerFilter))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load, update, and filter the local CT cache file: %s\n", err)
+	switch *filter {
+	case "issuer":
+		err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, t.filterOnIssuer(*issuerFilter))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load, update, and filter the local CT cache file: %s\n", err)
+			os.Exit(1)
+		}
+	case "issuerDeduped":
+		filterFunc, dedup := t.filterOnIssuerAndDedup(*issuerFilter)
+		err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, filterFunc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load, update, and filter the local CT cache file: %s\n", err)
+			os.Exit(1)
+		}
+		dedup()
+	}
+	if len(t.entries) == 0 {
+		fmt.Fprintf(os.Stderr, "filtered list contains no certificates!\n")
 		os.Exit(1)
 	}
+	close(t.entries)
+	t.totalCerts = len(t.entries)
 
 	t.begin()
 	t.printStats()
