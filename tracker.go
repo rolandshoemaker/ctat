@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -29,12 +28,16 @@ type tester struct {
 
 	progPrintInterval float64
 
-	namesSkipped          int64
-	namesUnavailable      int64
-	namesHTTPSDisabled    int64
-	namesTLSError         int64
-	namesUsingInvalidCert int64
-	namesCertNotUsed      int64
+	namesSkipped              int64
+	namesUnavailable          int64
+	namesHTTPSDisabled        int64
+	namesTLSError             int64
+	namesUsingInvalidCert     int64
+	namesUsingExpiredCert     int64
+	namesUsingIncompleteChain int64
+	namesUsingWrongCert       int64
+	namesUsingSelfSignedCert  int64
+	namesCertNotUsed          int64
 
 	certsUnused        int64
 	certsPartiallyUsed int64
@@ -51,13 +54,17 @@ type tester struct {
 }
 
 type result struct {
-	skipped          bool
-	hostAvailable    bool
-	httpsEnabled     bool
-	tlsError         bool
-	usingInvalidCert bool
-	certUsed         bool
-	properlySetup    bool
+	skipped              bool
+	hostAvailable        bool
+	httpsEnabled         bool
+	tlsError             bool
+	usingInvalidCert     bool
+	usingExpiredCert     bool
+	usingIncompleteChain bool
+	usingWrongCert       bool
+	usingSelfSignedCert  bool
+	certUsed             bool
+	properlySetup        bool
 }
 
 func (t *tester) processResults(results []result) {
@@ -82,6 +89,15 @@ func (t *tester) processResults(results []result) {
 		}
 		if r.usingInvalidCert {
 			atomic.AddInt64(&t.namesUsingInvalidCert, 1)
+			if r.usingExpiredCert {
+				atomic.AddInt64(&t.namesUsingExpiredCert, 1)
+			} else if r.usingIncompleteChain {
+				atomic.AddInt64(&t.namesUsingIncompleteChain, 1)
+			} else if r.usingWrongCert {
+				atomic.AddInt64(&t.namesUsingWrongCert, 1)
+			} else if r.usingSelfSignedCert {
+				atomic.AddInt64(&t.namesUsingSelfSignedCert, 1)
+			}
 			continue
 		}
 		if !r.certUsed {
@@ -137,51 +153,27 @@ func (t *tester) printProgress(stop chan bool) {
 	}
 }
 
+func percent(n, t int64) float64 {
+	return (float64(n) / float64(t)) * 100.0
+}
+
 func (t *tester) printStats() {
 	fmt.Println("\n# adoption statistics")
 	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.totalCerts, t.totalNames)
-	fmt.Printf("%d (%.2f%%) of names skipped\n", t.namesSkipped, (float64(t.namesSkipped)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, (float64(t.namesUnavailable)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS\n", t.namesHTTPSDisabled, (float64(t.namesHTTPSDisabled)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names threw a TLS handshake error\n", t.namesTLSError, (float64(t.namesTLSError)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names used an invalid certificate\n", t.namesUsingInvalidCert, (float64(t.namesUsingInvalidCert)/float64(t.totalNames))*100.0)
-	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, (float64(t.namesCertNotUsed)/float64(t.totalNames))*100.0)
+	fmt.Printf("%d (%.2f%%) of names skipped\n", t.namesSkipped, percent(t.namesSkipped, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, percent(t.namesUnavailable, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS\n", t.namesHTTPSDisabled, percent(t.namesHTTPSDisabled, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names threw a TLS handshake error\n", t.namesTLSError, percent(t.namesTLSError, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names used an invalid certificate\n", t.namesUsingInvalidCert, percent(t.namesUsingInvalidCert, t.totalNames))
+	fmt.Printf("\t%d (%.2f%%) of names sent a incomplete chain\n", t.namesUsingIncompleteChain, percent(t.namesUsingIncompleteChain, t.totalNames))
+	fmt.Printf("\t%d (%.2f%%) of names used a expired certificate\n", t.namesUsingExpiredCert, percent(t.namesUsingExpiredCert, t.totalNames))
+	fmt.Printf("\t%d (%.2f%%) of names used a self signed certificate\n", t.namesUsingSelfSignedCert, percent(t.namesUsingSelfSignedCert, t.totalNames))
+	fmt.Printf("\t%d (%.2f%%) of names used a certificate for names that didn't match\n", t.namesUsingWrongCert, percent(t.namesUsingWrongCert, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names didn't use the expected certificate\n", t.namesCertNotUsed, percent(t.namesCertNotUsed, t.totalNames))
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.certsUnused, (float64(t.certsUnused)/float64(t.totalCerts))*100.0)
-	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.certsPartiallyUsed, (float64(t.certsPartiallyUsed)/float64(t.totalCerts))*100.0)
-	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.certsTotallyUsed, (float64(t.certsTotallyUsed)/float64(t.totalCerts))*100.0)
-}
-
-type jsonResults struct {
-	Timestamp time.Time
-
-	TotalNames int64
-	TotalCerts int64
-
-	NamesSkipped          int64
-	NamesUnavailable      int64
-	NamesHTTPSDisabled    int64
-	NamesTLSError         int64
-	NamesUsingInvalidCert int64
-	NamesCertNotUsed      int64
-
-	CertsUnused        int64
-	CertsPartiallyUsed int64
-	CertsTotallyUsed   int64
-}
-
-func (t *tester) saveStats(filename string) error {
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	data, err := json.Marshal(jsonResults{})
-	if err != nil {
-		return err
-	}
-	_, err = file.WriteString(string(data))
-	return err
+	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.certsUnused, percent(t.certsUnused, int64(t.totalCerts)))
+	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.certsPartiallyUsed, percent(t.certsPartiallyUsed, int64(t.totalCerts)))
+	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.certsTotallyUsed, percent(t.certsTotallyUsed, int64(t.totalCerts)))
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
@@ -219,6 +211,23 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 		// this should really break down the "x509: " errors more, not-trusted/wrong name/expired etc...
 		// can use the x509.XXXError types to easily(ish) check this!
 		r.usingInvalidCert = true
+		if _, ok := err.(*x509.UnknownAuthorityError); ok {
+			r.usingIncompleteChain = true
+			return
+		}
+		if _, ok := err.(*x509.HostnameError); ok {
+			r.usingWrongCert = true
+			return
+		}
+		if invErr, ok := err.(*x509.CertificateInvalidError); ok {
+			if invErr.Reason == x509.Expired {
+				r.usingExpiredCert = true
+				return
+			} else if invErr.Reason == x509.NotAuthorizedToSign {
+				r.usingSelfSignedCert = true
+				return
+			}
+		}
 		return
 	}
 	r.hostAvailable = true
