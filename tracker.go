@@ -199,34 +199,48 @@ func percent(n, t int64) float64 {
 }
 
 func (t *tester) printStats() {
-	fmt.Println("\n# scan statistics")
-	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.processedCerts, t.processedNames)
+	fmt.Printf("\n# scan results breakdown\n\n")
+	fmt.Printf("\t%d certificates checked (totalling %d DNS names)\n", t.processedCerts, t.processedNames)
 	fmt.Println()
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 6, 4, 3, ' ', 0)
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames skipped due to TLS/DNS timeouts\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames had no valid DNS records\n", t.results.NamesDontExist, percent(t.results.NamesDontExist, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames couldn't be connected to\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames threw a TLS handshake error\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames sent a incomplete chain\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a expired certificate\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a self signed certificate\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a certificate for names that didn't match\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a invalid certificate (misc. reasons)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames didn't use their certificate\n", t.results.NamesCertNotUsed, percent(t.results.NamesCertNotUsed, t.processedNames))
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames had a stapled OCSP response\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.processedNames))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames served SCT receipts\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.processedNames))
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by none of their names\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by some of their names\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
-	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
+
+	fmt.Printf("\t# checked name problems\n\n")
+	fmt.Fprintf(w, "\tskipped\t%d\t(%.2f%%)\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.processedNames))
+	fmt.Fprintf(w, "\tinvalid DNS\t%d\t(%.2f%%)\n", t.results.NamesDontExist, percent(t.results.NamesDontExist, t.processedNames))
+	fmt.Fprintf(w, "\trefused/unavailable\t%d\t(%.2f%%)\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.processedNames))
+	fmt.Fprintf(w, "\tTLS error\t%d\t(%.2f%%)\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.processedNames))
+	fmt.Fprintf(w, "\tsent incomplete chain\t%d\t(%.2f%%)\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.processedNames))
+	fmt.Fprintf(w, "\texpired\t%d\t(%.2f%%)\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.processedNames))
+	fmt.Fprintf(w, "\tself-signed\t%d\t(%.2f%%)\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.processedNames))
+	fmt.Fprintf(w, "\twrong names\t%d\t(%.2f%%)\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.processedNames))
+	fmt.Fprintf(w, "\tmisc. invalid\t%d\t(%.2f%%)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.processedNames))
 	fmt.Fprintln(w)
 	w.Flush()
-	fmt.Printf("# cipher suite usage\n\n")
-	for k, v := range t.results.CipherHist {
-		fmt.Fprintf(w, "\t%d\t%s\n", v, k)
+
+	fmt.Printf("\t# feature usage\n\n")
+	fmt.Fprintf(w, "\tOCSP stapled\t%d\t(%.2f%%)\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.processedNames))
+	fmt.Fprintf(w, "\tSCT included\t%d\t(%.2f%%)\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.processedNames))
+	fmt.Fprintln(w)
+	w.Flush()
+
+	fmt.Printf("\t# adoption statistics\n\n")
+	fmt.Fprintf(w, "\tnames using issued cert\t%d\t(%.2f%%)\n", t.processedNames-t.results.NamesCertNotUsed, percent(t.processedNames-t.results.NamesCertNotUsed, t.processedNames))
+	fmt.Fprintf(w, "\tcerts used by no names\t%d\t(%.2f%%)\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\tcerts used by some names\t%d\t(%.2f%%)\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\tcerts used by all names\t%d\t(%.2f%%)\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
+	fmt.Fprintln(w)
+	w.Flush()
+
+	fmt.Printf("\t# cipher suite breakdown\n\n")
+	cipherNum := int64(0)
+	for _, v := range t.results.CipherHist {
+		cipherNum += v
 	}
+	for k, v := range t.results.CipherHist {
+		fmt.Fprintf(w, "\t%d\t(%.2f%%)\t%s\n", v, percent(v, cipherNum), k)
+	}
+	fmt.Fprintln(w)
 	w.Flush()
 }
 
