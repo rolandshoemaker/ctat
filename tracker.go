@@ -20,6 +20,23 @@ type testEntry struct {
 	leaf *x509.Certificate
 }
 
+type collectedResults struct {
+	NamesSkipped              int64
+	NamesUnavailable          int64
+	NamesHTTPSDisabled        int64
+	NamesTLSError             int64
+	NamesUsingMiscInvalidCert int64
+	NamesUsingExpiredCert     int64
+	NamesUsingIncompleteChain int64
+	NamesUsingWrongCert       int64
+	NamesUsingSelfSignedCert  int64
+	NamesCertNotUsed          int64
+
+	CertsUnused        int64
+	CertsPartiallyUsed int64
+	CertsTotallyUsed   int64
+}
+
 type tester struct {
 	totalCerts     int
 	processedCerts int64
@@ -28,20 +45,7 @@ type tester struct {
 
 	progPrintInterval float64
 
-	namesSkipped              int64
-	namesUnavailable          int64
-	namesHTTPSDisabled        int64
-	namesTLSError             int64
-	namesUsingMiscInvalidCert int64
-	namesUsingExpiredCert     int64
-	namesUsingIncompleteChain int64
-	namesUsingWrongCert       int64
-	namesUsingSelfSignedCert  int64
-	namesCertNotUsed          int64
-
-	certsUnused        int64
-	certsPartiallyUsed int64
-	certsTotallyUsed   int64
+	results collectedResults
 
 	workers int
 
@@ -72,49 +76,49 @@ func (t *tester) processResults(results []result) {
 	for _, r := range results {
 		if r.skipped {
 
-			atomic.AddInt64(&t.namesSkipped, 1)
+			atomic.AddInt64(&t.results.NamesSkipped, 1)
 			continue
 		}
 		if !r.hostAvailable {
-			atomic.AddInt64(&t.namesUnavailable, 1)
+			atomic.AddInt64(&t.results.NamesUnavailable, 1)
 			continue
 		}
 		if !r.httpsEnabled {
-			atomic.AddInt64(&t.namesHTTPSDisabled, 1)
+			atomic.AddInt64(&t.results.NamesHTTPSDisabled, 1)
 			continue
 		}
 		if r.tlsError {
-			atomic.AddInt64(&t.namesTLSError, 1)
+			atomic.AddInt64(&t.results.NamesTLSError, 1)
 			continue
 		}
 		if r.usingMiscInvalidCert {
-			atomic.AddInt64(&t.namesUsingMiscInvalidCert, 1)
+			atomic.AddInt64(&t.results.NamesUsingMiscInvalidCert, 1)
 			continue
 		} else if r.usingExpiredCert {
-			atomic.AddInt64(&t.namesUsingExpiredCert, 1)
+			atomic.AddInt64(&t.results.NamesUsingExpiredCert, 1)
 			continue
 		} else if r.usingIncompleteChain {
-			atomic.AddInt64(&t.namesUsingIncompleteChain, 1)
+			atomic.AddInt64(&t.results.NamesUsingIncompleteChain, 1)
 			continue
 		} else if r.usingWrongCert {
-			atomic.AddInt64(&t.namesUsingWrongCert, 1)
+			atomic.AddInt64(&t.results.NamesUsingWrongCert, 1)
 			continue
 		} else if r.usingSelfSignedCert {
-			atomic.AddInt64(&t.namesUsingSelfSignedCert, 1)
+			atomic.AddInt64(&t.results.NamesUsingSelfSignedCert, 1)
 			continue
 		}
 		if !r.certUsed {
-			atomic.AddInt64(&t.namesCertNotUsed, 1)
+			atomic.AddInt64(&t.results.NamesCertNotUsed, 1)
 			continue
 		}
 		used++
 	}
 	if used == len(results) {
-		atomic.AddInt64(&t.certsTotallyUsed, 1)
+		atomic.AddInt64(&t.results.CertsTotallyUsed, 1)
 	} else if used < len(results) && used > 0 {
-		atomic.AddInt64(&t.certsPartiallyUsed, 1)
+		atomic.AddInt64(&t.results.CertsPartiallyUsed, 1)
 	} else if used == 0 {
-		atomic.AddInt64(&t.certsUnused, 1)
+		atomic.AddInt64(&t.results.CertsUnused, 1)
 	}
 }
 
@@ -164,21 +168,21 @@ func (t *tester) printStats() {
 	fmt.Println("\n# adoption statistics")
 	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.totalCerts, t.totalNames)
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of names skipped\n", t.namesSkipped, percent(t.namesSkipped, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.namesUnavailable, percent(t.namesUnavailable, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS (inaccurate, fix!)\n", t.namesHTTPSDisabled, percent(t.namesHTTPSDisabled, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names threw a TLS handshake error\n", t.namesTLSError, percent(t.namesTLSError, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names sent a incomplete chain\n", t.namesUsingIncompleteChain, percent(t.namesUsingIncompleteChain, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a expired certificate\n", t.namesUsingExpiredCert, percent(t.namesUsingExpiredCert, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a self signed certificate\n", t.namesUsingSelfSignedCert, percent(t.namesUsingSelfSignedCert, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a certificate for names that didn't match\n", t.namesUsingWrongCert, percent(t.namesUsingWrongCert, t.totalNames))
-	fmt.Printf("%d (%.2f%%) of names used a misc. invalid certificate\n", t.namesUsingMiscInvalidCert, percent(t.namesUsingMiscInvalidCert, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names skipped\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names couldn't be connected to\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names don't serve HTTPS (inaccurate, fix!)\n", t.results.NamesHTTPSDisabled, percent(t.results.NamesHTTPSDisabled, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names threw a TLS handshake error\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names sent a incomplete chain\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names used a expired certificate\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names used a self signed certificate\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names used a certificate for names that didn't match\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names used a misc. invalid certificate\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.totalNames))
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of names didn't use their certificate\n", t.namesCertNotUsed, percent(t.namesCertNotUsed, t.totalNames))
+	fmt.Printf("%d (%.2f%%) of names didn't use their certificate\n", t.results.NamesCertNotUsed, percent(t.results.NamesCertNotUsed, t.totalNames))
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.certsUnused, percent(t.certsUnused, int64(t.totalCerts)))
-	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.certsPartiallyUsed, percent(t.certsPartiallyUsed, int64(t.totalCerts)))
-	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.certsTotallyUsed, percent(t.certsTotallyUsed, int64(t.totalCerts)))
+	fmt.Printf("%d (%.2f%%) of certificates were used by none of their names\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.totalCerts)))
+	fmt.Printf("%d (%.2f%%) of certificates were used by some of their names\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.totalCerts)))
+	fmt.Printf("%d (%.2f%%) of certificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.totalCerts)))
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {

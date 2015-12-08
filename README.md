@@ -20,7 +20,4 @@ default issuer common name filter also reflects this).
 * Add method to do optionally de-duped filtered chan (or via `entries.Map`)
 * Add method to randomly sample from filtered chan (or via `entries.Map` again maybe?)
 * Add method to record stats to disk
-* Cleanup the blob of results vars on `tester`, most likely move them to their own struct
-  so we can implement a `Marshal` method for it
 * Cleanup many... things
-
