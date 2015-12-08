@@ -16,10 +16,6 @@ import (
 	ct "github.com/jsha/certificatetransparency"
 )
 
-type testEntry struct {
-	leaf *x509.Certificate
-}
-
 type collectedResults struct {
 	NamesSkipped              int64
 	NamesUnavailable          int64
@@ -38,23 +34,22 @@ type collectedResults struct {
 }
 
 type tester struct {
-	totalCerts     int
-	processedCerts int64
-	totalNames     int64
-	processedNames int64
-
+	// progress stuff
+	totalCerts        int
+	processedCerts    int64
+	totalNames        int64
+	processedNames    int64
 	progPrintInterval float64
+	dontPrintProgress bool
 
-	results collectedResults
-
-	workers int
-
-	entries chan *testEntry
-
+	// important stuff
+	results       collectedResults
+	workers       int
+	entries       chan *x509.Certificate
 	dialerTimeout time.Duration
 
-	debug             bool
-	dontPrintProgress bool
+	// misc
+	debug bool
 }
 
 type result struct {
@@ -272,7 +267,7 @@ func (t *tester) begin() {
 		go func() {
 			defer wg.Done()
 			for te := range t.entries {
-				t.checkCert(te.leaf)
+				t.checkCert(te)
 			}
 		}()
 	}
@@ -297,7 +292,7 @@ func (t *tester) filterOnIssuer(issuerFilter string) func(*ct.EntryAndPosition, 
 			return
 		}
 		atomic.AddInt64(&t.totalNames, int64(len(cert.DNSNames)))
-		t.entries <- &testEntry{leaf: cert}
+		t.entries <- cert
 	}
 }
 
@@ -342,8 +337,11 @@ func (t *tester) loadAndUpdate(logURL, logKey, filename string, dontUpdate bool,
 	entriesFile.Seek(0, 0)
 
 	fmt.Println("filtering local cache")
-	t.entries = make(chan *testEntry, sth.Size)
+	t.entries = make(chan *x509.Certificate, sth.Size)
 	entriesFile.Map(filterFunc)
+	if len(t.entries) == 0 {
+		return fmt.Errorf("filtered list contains no certificates!")
+	}
 	close(t.entries)
 	t.totalCerts = len(t.entries)
 	return nil
