@@ -211,15 +211,15 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 		// this should really break down the "x509: " errors more, not-trusted/wrong name/expired etc...
 		// can use the x509.XXXError types to easily(ish) check this!
 		r.usingInvalidCert = true
-		if _, ok := err.(*x509.UnknownAuthorityError); ok {
+		if _, ok := err.(x509.UnknownAuthorityError); ok {
 			r.usingIncompleteChain = true
 			return
 		}
-		if _, ok := err.(*x509.HostnameError); ok {
+		if _, ok := err.(x509.HostnameError); ok {
 			r.usingWrongCert = true
 			return
 		}
-		if invErr, ok := err.(*x509.CertificateInvalidError); ok {
+		if invErr, ok := err.(x509.CertificateInvalidError); ok {
 			if invErr.Reason == x509.Expired {
 				r.usingExpiredCert = true
 				return
@@ -278,46 +278,8 @@ func (t *tester) begin() {
 	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
 
-func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int64, error) {
-	pemPublicKey := fmt.Sprintf(`-----BEGIN PUBLIC KEY-----
-%s
------END PUBLIC KEY-----`, logKey)
-	ctLog, err := ct.NewLog(logURL, pemPublicKey)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer file.Close()
-
-	entriesFile := ct.EntriesFile{file}
-
-	sth, err := ctLog.GetSignedTreeHead()
-	if err != nil {
-		return nil, 0, err
-	}
-
-	count, err := entriesFile.Count()
-	if err != nil {
-		return nil, 0, err
-	}
-	fmt.Printf("local entries: %d, remote entries: %d at %s\n", count, sth.Size, sth.Time.Format(time.ANSIC))
-	if !dontUpdate && count < sth.Size {
-		fmt.Println("updating local cache...")
-		_, err = ctLog.DownloadRange(file, nil, count, sth.Size)
-		if err != nil {
-			return nil, 0, err
-		}
-	}
-	entriesFile.Seek(0, 0)
-
-	fmt.Printf("filtering local cache for certificates with issuer \"%s\"\n", issuerFilter)
-	filtered := make(chan *testEntry, sth.Size)
-	numNames := int64(0)
-	entriesFile.Map(func(ent *ct.EntryAndPosition, err error) {
+func (t *tester) filterOnIssuer(issuerFilter string) func(*ct.EntryAndPosition, error) {
+	return func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
 			return
 		}
@@ -331,11 +293,57 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 		if time.Now().After(cert.NotAfter) {
 			return
 		}
-		atomic.AddInt64(&numNames, int64(len(cert.DNSNames)))
-		filtered <- &testEntry{leaf: cert}
-	})
-	close(filtered)
-	return filtered, numNames, nil
+		atomic.AddInt64(&t.totalNames, int64(len(cert.DNSNames)))
+		t.entries <- &testEntry{leaf: cert}
+	}
+}
+
+func (t *tester) filterOnIssuerAndSample(issuerFilter string) func(*ct.EntryAndPosition, error) {
+	return nil
+}
+
+func (t *tester) loadAndUpdate(logURL, logKey, filename string, dontUpdate bool, filterFunc func(*ct.EntryAndPosition, error)) error {
+	pemPublicKey := fmt.Sprintf(`-----BEGIN PUBLIC KEY-----
+%s
+-----END PUBLIC KEY-----`, logKey)
+	ctLog, err := ct.NewLog(logURL, pemPublicKey)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	entriesFile := ct.EntriesFile{file}
+
+	sth, err := ctLog.GetSignedTreeHead()
+	if err != nil {
+		return err
+	}
+
+	count, err := entriesFile.Count()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("local entries: %d, remote entries: %d at %s\n", count, sth.Size, sth.Time.Format(time.ANSIC))
+	if !dontUpdate && count < sth.Size {
+		fmt.Println("updating local cache...")
+		_, err = ctLog.DownloadRange(file, nil, count, sth.Size)
+		if err != nil {
+			return err
+		}
+	}
+	entriesFile.Seek(0, 0)
+
+	fmt.Println("filtering local cache")
+	t.entries = make(chan *testEntry, sth.Size)
+	entriesFile.Map(filterFunc)
+	close(t.entries)
+	t.totalCerts = len(t.entries)
+	return nil
 }
 
 func main() {
@@ -350,21 +358,20 @@ func main() {
 	scannerTimeout := flag.Duration("scannerTimeout", time.Second*5, "dialer timeout for the tls scanners (uses golang duration format, e.g. 5s)")
 	flag.Parse()
 
-	entries, numNames, err := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter, *dontUpdateCache)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load, update, and filter the local CT cache file: %s\n", err)
-		return
-	}
 	t := tester{
-		entries:           entries,
-		totalCerts:        len(entries),
-		totalNames:        numNames,
 		workers:           *scanners,
 		progPrintInterval: 5.0,
 		debug:             *debug,
 		dontPrintProgress: *dontPrintProgress,
 		dialerTimeout:     *scannerTimeout,
 	}
+
+	err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, t.filterOnIssuer(*issuerFilter))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load, update, and filter the local CT cache file: %s\n", err)
+		return
+	}
+
 	t.begin()
 	t.printStats()
 }
