@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"text/tabwriter"
 	"time"
 
 	ct "github.com/jsha/certificatetransparency"
@@ -19,6 +20,7 @@ import (
 
 type collectedResults struct {
 	NamesSkipped              int64
+	NamesDontExist            int64
 	NamesUnavailable          int64
 	NamesTLSError             int64
 	NamesUsingMiscInvalidCert int64
@@ -56,6 +58,7 @@ type tester struct {
 
 type result struct {
 	skipped              bool
+	nameDoesntExist      bool
 	hostAvailable        bool
 	tlsError             bool
 	usingMiscInvalidCert bool
@@ -74,6 +77,10 @@ func (t *tester) processResults(results []result) {
 		if r.skipped {
 
 			atomic.AddInt64(&t.results.NamesSkipped, 1)
+			continue
+		}
+		if r.nameDoesntExist {
+			atomic.AddInt64(&t.results.NamesDontExist, 1)
 			continue
 		}
 		if !r.hostAvailable {
@@ -164,25 +171,30 @@ func percent(n, t int64) float64 {
 }
 
 func (t *tester) printStats() {
-	fmt.Println("\n# adoption statistics")
+	fmt.Println("\n# scan statistics")
 	fmt.Printf("%d certificates checked (totalling %d DNS names)\n", t.processedCerts, t.processedNames)
 	fmt.Println()
-	fmt.Printf("%d (%.2f%%) names skipped\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names couldn't be connected to\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names threw a TLS handshake error\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names sent a incomplete chain\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names used a expired certificate\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names used a self signed certificate\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names used a certificate for names that didn't match\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names used a invalid certificate (misc. reasons)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names didn't use their certificate\n", t.results.NamesCertNotUsed, percent(t.results.NamesCertNotUsed, t.processedNames))
-	fmt.Println()
-	fmt.Printf("%d (%.2f%%) names had a stapled OCSP response\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.processedNames))
-	fmt.Printf("%d (%.2f%%) names served SCT receipts\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.processedNames))
-	fmt.Println()
-	fmt.Printf("%d (%.2f%%) certificates were used by none of their names\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
-	fmt.Printf("%d (%.2f%%) certificates were used by some of their names\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
-	fmt.Printf("%d (%.2f%%) certificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
+	w := new(tabwriter.Writer)
+	w.Init(os.Stdout, 6, 4, 3, ' ', 0)
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames skipped due to TLS/DNS timeouts\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames had no valid DNS records\n", t.results.NamesDontExist, percent(t.results.NamesDontExist, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames couldn't be connected to\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames threw a TLS handshake error\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames sent a incomplete chain\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a expired certificate\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a self signed certificate\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a certificate for names that didn't match\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames used a invalid certificate (misc. reasons)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames didn't use their certificate\n", t.results.NamesCertNotUsed, percent(t.results.NamesCertNotUsed, t.processedNames))
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames had a stapled OCSP response\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.processedNames))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tnames served SCT receipts\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.processedNames))
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by none of their names\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by some of their names\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
+	fmt.Fprintln(w)
+	w.Flush()
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
@@ -202,6 +214,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 				if dnsErr.Timeout() || dnsErr.Temporary() {
 					r.skipped = true
 				}
+				r.nameDoesntExist = true
 			}
 			// Hosts that don't serve HTTPS are marked unavailable (this should be noted elsewhere...)
 			return
@@ -299,6 +312,7 @@ func (t *tester) begin() {
 		}
 	}()
 	wg.Wait()
+	signal.Stop(sigChan)
 	stopProg <- true
 	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
