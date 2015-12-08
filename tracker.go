@@ -134,13 +134,14 @@ func (t *tester) printProgress(stop chan bool) {
 				eta = etaDur.String()
 			}
 			if prog != "" {
+				// Assume VT100 because \b is terrible
 				fmt.Fprintf(os.Stdout, fmt.Sprintf("\033[1K\033[%dD", len(prog)))
 			}
 			prog = fmt.Sprintf(
 				"%d/%d certificates checked, %d/%d names [%.2f cps, %.2f nps, eta: %s]",
-				atomic.LoadInt64(&t.processedCerts),
+				processedCerts,
 				t.totalCerts,
-				atomic.LoadInt64(&t.processedNames),
+				processedNames,
 				t.totalNames,
 				cps,
 				nps,
@@ -277,20 +278,18 @@ func (t *tester) begin() {
 	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
 }
 
-func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int64) {
+func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate bool) (chan *testEntry, int64, error) {
 	pemPublicKey := fmt.Sprintf(`-----BEGIN PUBLIC KEY-----
 %s
 -----END PUBLIC KEY-----`, logKey)
 	ctLog, err := ct.NewLog(logURL, pemPublicKey)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize log: %s\n", err)
-		os.Exit(1)
+		return nil, 0, err
 	}
 
 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open entries file: %s\n", err)
-		os.Exit(1)
+		return nil, 0, err
 	}
 	defer file.Close()
 
@@ -298,22 +297,19 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 
 	sth, err := ctLog.GetSignedTreeHead()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "GetSignedTreeHead: %s\n", err)
-		os.Exit(1)
+		return nil, 0, err
 	}
 
 	count, err := entriesFile.Count()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nFailed to read entries file: %s\n", err)
-		os.Exit(1)
+		return nil, 0, err
 	}
 	fmt.Printf("local entries: %d, remote entries: %d at %s\n", count, sth.Size, sth.Time.Format(time.ANSIC))
 	if !dontUpdate && count < sth.Size {
 		fmt.Println("updating local cache...")
 		_, err = ctLog.DownloadRange(file, nil, count, sth.Size)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nFailed to update CT log: %s\n", err)
-			os.Exit(1)
+			return nil, 0, err
 		}
 	}
 	entriesFile.Seek(0, 0)
@@ -339,7 +335,7 @@ func loadAndUpdate(logURL, logKey, filename, issuerFilter string, dontUpdate boo
 		filtered <- &testEntry{leaf: cert}
 	})
 	close(filtered)
-	return filtered, numNames
+	return filtered, numNames, nil
 }
 
 func main() {
@@ -354,7 +350,11 @@ func main() {
 	scannerTimeout := flag.Duration("scannerTimeout", time.Second*5, "dialer timeout for the tls scanners (uses golang duration format, e.g. 5s)")
 	flag.Parse()
 
-	entries, numNames := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter, *dontUpdateCache)
+	entries, numNames, err := loadAndUpdate(*logURL, *logKey, *filename, *issuerFilter, *dontUpdateCache)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load, update, and filter the local CT cache file: %s\n", err)
+		return
+	}
 	t := tester{
 		entries:           entries,
 		totalCerts:        len(entries),

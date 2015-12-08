@@ -11,3 +11,15 @@ serves HTTPS, and serves the expected leaf certificate.
 By default the `certly.io` log is used since it is a. the smallest on disk, and b. it contains
 all of the certificates issued by Let's Encrypt, the CA this tool was created to track (the
 default issuer common name filter also reflects this). 
+
+## TODO
+
+* Add checking for OCSP status in `checkName`
+* Add check for stapled OCSP response in `checkName`
+* Add cipher suite check (simple map hist for the types) in `checkName`
+* Add method to do optionally de-duped filtered chan (or via `entries.Map`)
+* Add method to randomly sample from filtered chan (or via `entries.Map` again maybe?)
+* Add method to record stats to disk
+* Cleanup the blob of results vars on `tester`, most likely move them to their own struct
+  so we can implement a `Marshal` method for it
+* Cleanup many... things
