@@ -117,8 +117,7 @@ func (t *tester) processResults(results []result) {
 
 func (t *tester) printProgress(stop chan bool) {
 	prog := ""
-	processedCertsLast := int64(0)
-	processedNamesLast := int64(0)
+	started := time.Now()
 	for {
 		select {
 		case <-stop:
@@ -126,11 +125,13 @@ func (t *tester) printProgress(stop chan bool) {
 		default:
 			processedCerts := atomic.LoadInt64(&t.processedCerts)
 			processedNames := atomic.LoadInt64(&t.processedNames)
-			newCerts := processedCerts - processedCertsLast
-			newNames := processedNames - processedNamesLast
+			taken := time.Since(started).Seconds()
+			cps := float64(processedCerts) / taken
+			nps := float64(processedNames) / taken
 			eta := "???"
-			if newNames > 0 {
-				eta = (time.Second * time.Duration((float64(t.totalNames) / (float64(newNames) / t.progPrintInterval)))).String()
+			etaDur := time.Second * time.Duration(float64(t.totalNames-processedNames)/nps)
+			if etaDur > time.Second && etaDur < (24*time.Hour) {
+				eta = etaDur.String()
 			}
 			if prog != "" {
 				fmt.Fprintf(os.Stdout, fmt.Sprintf("\033[1K\033[%dD", len(prog)))
@@ -141,14 +142,12 @@ func (t *tester) printProgress(stop chan bool) {
 				t.totalCerts,
 				atomic.LoadInt64(&t.processedNames),
 				t.totalNames,
-				float64(newCerts)/t.progPrintInterval,
-				float64(newNames)/t.progPrintInterval,
+				cps,
+				nps,
 				eta,
 			)
 			fmt.Fprintf(os.Stdout, prog)
 			time.Sleep(time.Second * time.Duration(t.progPrintInterval))
-			processedCertsLast = processedCerts
-			processedNamesLast = processedNames
 		}
 	}
 }
