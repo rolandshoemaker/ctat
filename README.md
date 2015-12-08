@@ -14,10 +14,9 @@ default issuer common name filter also reflects this).
 
 ## TODO
 
-* Print stats and exit normally if ctrl-c
 * Add checking for OCSP status in `checkName`
-* Add check for stapled quality of OCSP response in `checkName`
-* Add cipher suite check (simple map hist for the types?) in `checkName`
+* Add check for quality of stapled OCSP response in `checkName`
+* Add cipher suite strength conversion (I forget how chromium does this...)
 * Add method to do optionally de-duped filtered chan (or via `entries.Map`)
 * Add method to randomly sample from filtered chan (or via `entries.Map` again maybe?)
 * Add method to record stats to disk

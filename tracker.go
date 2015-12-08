@@ -18,6 +18,24 @@ import (
 	ct "github.com/jsha/certificatetransparency"
 )
 
+var suiteToString = map[uint16]string{
+	0x0005: "TLS RSA WITH RC4 128 SHA",
+	0x000a: "TLS RSA WITH 3DES EDE CBC SHA",
+	0x002f: "TLS RSA WITH AES 128 CBC SHA",
+	0x0035: "TLS RSA WITH AES 256 CBC SHA",
+	0xc007: "TLS ECDHE ECDSA WITH RC4 128 SHA",
+	0xc009: "TLS ECDHE ECDSA WITH AES 128 CBC SHA",
+	0xc00a: "TLS ECDHE ECDSA WITH AES 256 CBC SHA",
+	0xc011: "TLS ECDHE RSA WITH RC4 128 SHA",
+	0xc012: "TLS ECDHE RSA WITH 3DES EDE CBC SHA",
+	0xc013: "TLS ECDHE RSA WITH AES 128 CBC SHA",
+	0xc014: "TLS ECDHE RSA WITH AES 256 CBC SHA",
+	0xc02f: "TLS ECDHE RSA WITH AES 128 GCM SHA256",
+	0xc02b: "TLS ECDHE ECDSA WITH AES 128 GCM SHA256",
+	0xc030: "TLS ECDHE RSA WITH AES 256 GCM SHA384",
+	0xc02c: "TLS ECDHE ECDSA WITH AES 256 GCM SHA384",
+}
+
 type collectedResults struct {
 	NamesSkipped              int64
 	NamesDontExist            int64
@@ -35,6 +53,9 @@ type collectedResults struct {
 	CertsUnused        int64
 	CertsPartiallyUsed int64
 	CertsTotallyUsed   int64
+
+	chMu       *sync.Mutex
+	CipherHist map[string]int64
 }
 
 type tester struct {
@@ -69,6 +90,8 @@ type result struct {
 	certUsed             bool
 	ocspStapled          bool
 	servesSCTs           bool
+
+	cipherSuite uint16
 }
 
 func (t *tester) processResults(results []result) {
@@ -116,6 +139,11 @@ func (t *tester) processResults(results []result) {
 		}
 		if r.servesSCTs {
 			atomic.AddInt64(&t.results.NamesServingSCTs, 1)
+		}
+		if r.cipherSuite > 0 {
+			t.results.chMu.Lock()
+			t.results.CipherHist[suiteToString[r.cipherSuite]]++
+			t.results.chMu.Unlock()
 		}
 		used++
 	}
@@ -195,6 +223,11 @@ func (t *tester) printStats() {
 	fmt.Fprintf(w, "\t%d\t(%.2f%%)\tcertificates were used by all of their names\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
 	fmt.Fprintln(w)
 	w.Flush()
+	fmt.Printf("# cipher suite usage\n\n")
+	for k, v := range t.results.CipherHist {
+		fmt.Fprintf(w, "\t%d\t%s\n", v, k)
+	}
+	w.Flush()
 }
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
@@ -263,6 +296,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	if len(state.SignedCertificateTimestamps) != 0 {
 		r.servesSCTs = true
 	}
+	r.cipherSuite = state.CipherSuite
 	return
 }
 
@@ -406,6 +440,10 @@ func main() {
 		debug:             *debug,
 		dontPrintProgress: *dontPrintProgress,
 		dialerTimeout:     *scannerTimeout,
+		results: collectedResults{
+			chMu:       new(sync.Mutex),
+			CipherHist: make(map[string]int64),
+		},
 	}
 
 	err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, t.filterOnIssuer(*issuerFilter))
