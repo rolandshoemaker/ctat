@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -383,6 +384,45 @@ func (t *tester) filterOnIssuer(issuerFilter string) func(*ct.EntryAndPosition, 
 		atomic.AddInt64(&t.totalNames, int64(len(cert.DNSNames)))
 		t.entries <- cert
 	}
+}
+
+func (t *tester) filterOnIssuerAndDedup(issuerFilter string) (func(*ct.EntryAndPosition, error), func()) {
+	ddMap := make(map[string]*x509.Certificate)
+	ddMu := new(sync.Mutex)
+	return func(ent *ct.EntryAndPosition, err error) {
+			if err != nil {
+				return
+			}
+			cert, err := x509.ParseCertificate(ent.Entry.X509Cert)
+			if err != nil {
+				return
+			}
+			if cert.Issuer.CommonName != issuerFilter {
+				return
+			}
+			if time.Now().After(cert.NotAfter) {
+				return
+			}
+			names := cert.DNSNames
+			sort.Strings(names)
+			sortedNames := strings.Join(names, ",")
+			ddMu.Lock()
+			if oldCert, present := ddMap[sortedNames]; present {
+				if cert.NotAfter.After(oldCert.NotAfter) {
+					ddMap[sortedNames] = cert
+				}
+			} else {
+				ddMap[sortedNames] = cert
+			}
+			ddMu.Unlock()
+		}, func() {
+			ddMu.Lock()
+			defer ddMu.Unlock()
+			for _, c := range ddMap {
+				atomic.AddInt64(&t.totalNames, int64(len(c.DNSNames)))
+				t.entries <- c
+			}
+		}
 }
 
 func (t *tester) filterOnIssuerAndSample(issuerFilter string) func(*ct.EntryAndPosition, error) {
