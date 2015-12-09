@@ -6,7 +6,7 @@ import numpy as np
 import datetime
 
 matplotlib.style.use('ggplot')
-matplotlib.rcParams['figure.figsize'] = 22, 7
+matplotlib.rcParams['figure.figsize'] = 17, 5
 
 scan_data = []
 with open("scan-stats.json", "r") as f:
@@ -40,8 +40,8 @@ lgd = axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", bor
 
 # second plot, scan info
 fig2, axes2 = plt.subplots()
-l1 = axes2.plot(df.index, df['ProcessedCerts'], label='Scanned names', color='green')
-l2 = axes2.plot(df.index, df['ProcessedNames'], label='Processed certificates', color='blue')
+l1 = axes2.plot(df.index, df['ProcessedNames'], label='Processed certificates', color='blue')
+l2 = axes2.plot(df.index, df['ProcessedCerts'], label='Scanned names', color='green')
 tickLabels = axes2.get_xticklabels()
 ax2 = axes2.twinx()
 ax2.set_ylabel('Hours')
@@ -80,7 +80,7 @@ for c in vf:
 vf = vf.fillna(0)
 vf['sum'] = None
 vf.plot(ax=axes4)
-lgd4 = axes4.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
+lgd4 = axes4.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=3)
 # axes4.set_yscale('log')
 
 for ax in [axes, axes2, axes3, axes4]:
@@ -88,8 +88,10 @@ for ax in [axes, axes2, axes3, axes4]:
     plt.xticks(rotation=30, ha='right', visible=True)
     ax.set_xlim(df.index.min(), df.index.max())
     ax.set_xlabel("")
+    ax.grid(False)
 ax2.set_xlim(df.index.min(), df.index.max())
 ax2.set_xlabel("")
+ax2.grid(False)
 from matplotlib.ticker import FormatStrFormatter
 for ax in [axes, axes3, axes4]:
     ax.yaxis.set_major_formatter(FormatStrFormatter("%s %%"))
