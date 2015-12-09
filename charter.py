@@ -1,8 +1,11 @@
 import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pandas
 import numpy as np
 import datetime
+
+matplotlib.style.use('ggplot')
 matplotlib.rcParams['figure.figsize'] = 22, 7
 
 scan_data = []
@@ -33,11 +36,10 @@ axes.plot(df.index, df['CertsUnused'], label='Unused certificates')
 axes.plot(df.index, df['CertsPartiallyUsed'], label='Partially used certificates')
 axes.plot(df.index, df['CertsTotallyUsed'], label='Completed used certificates')
 axes.plot(df.index, df['NamesCertUsed'], label='Names using their certificate')
-axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
-fig.savefig("adoption.png")
+lgd = axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 
 # second plot, scan info
-fig, axes2 = plt.subplots()
+fig2, axes2 = plt.subplots()
 l1 = axes2.plot(df.index, df['ProcessedCerts'], label='Scanned names', color='green')
 l2 = axes2.plot(df.index, df['ProcessedNames'], label='Processed certificates', color='blue')
 tickLabels = axes2.get_xticklabels()
@@ -47,11 +49,10 @@ l3 = ax2.plot(df.index, df['Scan took'], label='Scan time', color='black')
 
 ls = l1+l2+l3
 labs = [l.get_label() for l in ls]
-ax2.legend(ls, labs, bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=3)
-fig.savefig("scan-info.png")
+lgd2 = ax2.legend(ls, labs, bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=3)
 
 # third plot, name problems
-fig, axes3 = plt.subplots()
+fig3, axes3 = plt.subplots()
 axes3.plot(df.index, df['NamesDontExist'], label='Invalid DNS')
 axes3.plot(df.index, df['NamesUnavailable'], label='Refused/Unavailable')
 axes3.plot(df.index, df['NamesSkipped'], label='Timed out')
@@ -61,11 +62,10 @@ axes3.plot(df.index, df['NamesUsingExpiredCert'], label='Using expired cert')
 axes3.plot(df.index, df['NamesUsingWrongCert'], label='Using wrong cert')
 axes3.plot(df.index, df['NamesUsingSelfSignedCert'], label='Using self signed cert')
 axes3.plot(df.index, df['NamesUsingMiscInvalidCert'], label='Using misc. invalid cert')
-axes3.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
-fig.savefig("problems.png")
+lgd3 = axes3.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 
 # fourth plot, cipher suite info
-fig, axes4 = plt.subplots()
+fig4, axes4 = plt.subplots()
 cipherStuff = []
 for i, v in df.iterrows():
     v['CipherHist']['index'] = i
@@ -80,9 +80,8 @@ for c in vf:
 vf = vf.fillna(0)
 vf['sum'] = None
 vf.plot(ax=axes4)
-axes4.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
+lgd4 = axes4.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 # axes4.set_yscale('log')
-fig.savefig("ciphers.png")
 
 for ax in [axes, axes2, axes3, axes4]:
     matplotlib.pyplot.sca(ax)
@@ -95,3 +94,7 @@ from matplotlib.ticker import FormatStrFormatter
 for ax in [axes, axes3, axes4]:
     ax.yaxis.set_major_formatter(FormatStrFormatter("%s %%"))
 
+fig.savefig("adoption.png", bbox_extra_artists=(lgd,), bbox_inches='tight')
+fig2.savefig("scan-info.png", bbox_extra_artists=(lgd2,), bbox_inches='tight')
+fig3.savefig("problems.png", bbox_extra_artists=(lgd3,), bbox_inches='tight')
+fig4.savefig("ciphers.png", bbox_extra_artists=(lgd4,), bbox_inches='tight')
