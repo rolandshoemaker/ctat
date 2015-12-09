@@ -15,9 +15,8 @@ default issuer common name filter also reflects this).
 ## TODO
 
 * Add checking for OCSP status in `checkName`
-* Add check for quality of stapled OCSP response in `checkName`
+  * Add check if stapled matches queried
 * Add cipher suite strength conversion (I forget how chromium does this...)
-* Add method to do optionally de-duped filtered chan (or via `entries.Map`)
 * Add method to randomly sample from filtered chan (or via `entries.Map` again maybe?)
 * Add method to record stats to disk
 * Cleanup many... things

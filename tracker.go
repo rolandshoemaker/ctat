@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -39,6 +40,12 @@ var suiteToString = map[uint16]string{
 }
 
 type collectedResults struct {
+	Started  time.Time
+	Finished time.Time
+
+	ProcessedCerts int64
+	ProcessedNames int64
+
 	NamesSkipped              int64
 	NamesDontExist            int64
 	NamesUnavailable          int64
@@ -68,9 +75,7 @@ type workUnit struct {
 type tester struct {
 	// progress stuff
 	totalCerts        int
-	processedCerts    int64
 	totalNames        int64
-	processedNames    int64
 	progPrintInterval float64
 	dontPrintProgress bool
 
@@ -171,8 +176,8 @@ func (t *tester) printProgress(stop chan bool) {
 		case <-stop:
 			return
 		default:
-			processedCerts := atomic.LoadInt64(&t.processedCerts)
-			processedNames := atomic.LoadInt64(&t.processedNames)
+			processedCerts := atomic.LoadInt64(&t.results.ProcessedCerts)
+			processedNames := atomic.LoadInt64(&t.results.ProcessedNames)
 			taken := time.Since(started).Seconds()
 			cps := float64(processedCerts) / taken
 			nps := float64(processedNames) / taken
@@ -207,35 +212,35 @@ func percent(n, t int64) float64 {
 
 func (t *tester) printStats() {
 	fmt.Printf("\n# scan results breakdown\n\n")
-	fmt.Printf("\t%d certificates checked (totalling %d DNS names)\n", t.processedCerts, t.processedNames)
+	fmt.Printf("\t%d certificates checked (totalling %d DNS names)\n", t.results.ProcessedCerts, t.results.ProcessedNames)
 	fmt.Println()
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 6, 4, 3, ' ', 0)
 
 	fmt.Printf("\t# name problems\n\n")
-	fmt.Fprintf(w, "\tinvalid DNS\t%d\t(%.2f%%)\n", t.results.NamesDontExist, percent(t.results.NamesDontExist, t.processedNames))
-	fmt.Fprintf(w, "\trefused/unavailable\t%d\t(%.2f%%)\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.processedNames))
-	fmt.Fprintf(w, "\ttimed out\t%d\t(%.2f%%)\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.processedNames))
-	fmt.Fprintf(w, "\tTLS error\t%d\t(%.2f%%)\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.processedNames))
-	fmt.Fprintf(w, "\tsent incomplete chain\t%d\t(%.2f%%)\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.processedNames))
-	fmt.Fprintf(w, "\texpired cert\t%d\t(%.2f%%)\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.processedNames))
-	fmt.Fprintf(w, "\tself-signed cert\t%d\t(%.2f%%)\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.processedNames))
-	fmt.Fprintf(w, "\tcert has wrong names\t%d\t(%.2f%%)\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.processedNames))
-	fmt.Fprintf(w, "\tmisc. invalid cert\t%d\t(%.2f%%)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.processedNames))
+	fmt.Fprintf(w, "\tinvalid DNS\t%d\t(%.2f%%)\n", t.results.NamesDontExist, percent(t.results.NamesDontExist, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\trefused/unavailable\t%d\t(%.2f%%)\n", t.results.NamesUnavailable, percent(t.results.NamesUnavailable, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\ttimed out\t%d\t(%.2f%%)\n", t.results.NamesSkipped, percent(t.results.NamesSkipped, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tTLS error\t%d\t(%.2f%%)\n", t.results.NamesTLSError, percent(t.results.NamesTLSError, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tsent incomplete chain\t%d\t(%.2f%%)\n", t.results.NamesUsingIncompleteChain, percent(t.results.NamesUsingIncompleteChain, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\texpired cert\t%d\t(%.2f%%)\n", t.results.NamesUsingExpiredCert, percent(t.results.NamesUsingExpiredCert, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tself-signed cert\t%d\t(%.2f%%)\n", t.results.NamesUsingSelfSignedCert, percent(t.results.NamesUsingSelfSignedCert, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tcert has wrong names\t%d\t(%.2f%%)\n", t.results.NamesUsingWrongCert, percent(t.results.NamesUsingWrongCert, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tmisc. invalid cert\t%d\t(%.2f%%)\n", t.results.NamesUsingMiscInvalidCert, percent(t.results.NamesUsingMiscInvalidCert, t.results.ProcessedNames))
 	fmt.Fprintln(w)
 	w.Flush()
 
 	fmt.Printf("\t# feature usage\n\n")
-	fmt.Fprintf(w, "\tOCSP stapled\t%d\t(%.2f%%)\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.processedNames))
-	fmt.Fprintf(w, "\tSCT included\t%d\t(%.2f%%)\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.processedNames))
+	fmt.Fprintf(w, "\tOCSP stapled\t%d\t(%.2f%%)\n", t.results.NamesWithOCSPStapled, percent(t.results.NamesWithOCSPStapled, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tSCT included\t%d\t(%.2f%%)\n", t.results.NamesServingSCTs, percent(t.results.NamesServingSCTs, t.results.ProcessedNames))
 	fmt.Fprintln(w)
 	w.Flush()
 
 	fmt.Printf("\t# adoption statistics\n\n")
-	fmt.Fprintf(w, "\tnames using issued cert\t%d\t(%.2f%%)\n", t.processedNames-t.results.NamesCertNotUsed, percent(t.processedNames-t.results.NamesCertNotUsed, t.processedNames))
-	fmt.Fprintf(w, "\tcerts used by all names\t%d\t(%.2f%%)\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.processedCerts)))
-	fmt.Fprintf(w, "\tcerts used by some names\t%d\t(%.2f%%)\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.processedCerts)))
-	fmt.Fprintf(w, "\tcerts used by no names\t%d\t(%.2f%%)\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.processedCerts)))
+	fmt.Fprintf(w, "\tnames using issued cert\t%d\t(%.2f%%)\n", t.results.ProcessedNames-t.results.NamesCertNotUsed, percent(t.results.ProcessedNames-t.results.NamesCertNotUsed, t.results.ProcessedNames))
+	fmt.Fprintf(w, "\tcerts used by all names\t%d\t(%.2f%%)\n", t.results.CertsTotallyUsed, percent(t.results.CertsTotallyUsed, int64(t.results.ProcessedCerts)))
+	fmt.Fprintf(w, "\tcerts used by some names\t%d\t(%.2f%%)\n", t.results.CertsPartiallyUsed, percent(t.results.CertsPartiallyUsed, int64(t.results.ProcessedCerts)))
+	fmt.Fprintf(w, "\tcerts used by no names\t%d\t(%.2f%%)\n", t.results.CertsUnused, percent(t.results.CertsUnused, int64(t.results.ProcessedCerts)))
 	fmt.Fprintln(w)
 	w.Flush()
 
@@ -251,8 +256,26 @@ func (t *tester) printStats() {
 	w.Flush()
 }
 
+func (t *tester) saveStats(filename string) error {
+	jsonBytes, err := json.Marshal(t.results)
+	if err != nil {
+		return err
+	}
+	content := string(jsonBytes)
+	if !strings.HasSuffix("\n", content) {
+		content = content + "\n"
+	}
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(content)
+	return err
+}
+
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
-	defer atomic.AddInt64(&t.processedNames, 1)
+	defer atomic.AddInt64(&t.results.ProcessedNames, 1)
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: t.dialerTimeout}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
 	if err != nil {
 		// this should probably retry on some set of errors :/
@@ -322,7 +345,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 }
 
 func (t *tester) checkCert(cert *x509.Certificate) {
-	defer atomic.AddInt64(&t.processedCerts, 1)
+	defer atomic.AddInt64(&t.results.ProcessedCerts, 1)
 	fp := sha256.Sum256(cert.Raw)
 	var results []result
 	for _, name := range cert.DNSNames {
@@ -331,14 +354,14 @@ func (t *tester) checkCert(cert *x509.Certificate) {
 	t.processResults(results)
 }
 
-func (t *tester) begin() {
+func (t *tester) run() {
 	fmt.Printf("beginning scan of %d certificates (%d names)\n", t.totalCerts, t.totalNames)
 	stopProg := make(chan bool, 1)
 	if !t.debug && !t.dontPrintProgress {
 		go t.printProgress(stopProg)
 	}
 	wg := new(sync.WaitGroup)
-	started := time.Now()
+	t.results.Started = time.Now()
 	stopWorkers := []chan bool{}
 	for i := 0; i < t.workers; i++ {
 		stop := make(chan bool, 1)
@@ -367,9 +390,10 @@ func (t *tester) begin() {
 		}
 	}()
 	wg.Wait()
+	t.results.Finished = time.Now()
 	signal.Stop(sigChan)
 	stopProg <- true
-	fmt.Printf("\n\nscan finished, took %s\n", time.Since(started))
+	fmt.Printf("\n\nscan finished, took %s\n", t.results.Finished.Sub(t.results.Started))
 }
 
 func basicFilter(issuerFilter string, checkOCSP bool, ent *ct.EntryAndPosition, err error) (*x509.Certificate, *ocsp.Response) {
@@ -489,6 +513,7 @@ func main() {
 	dontPrintProgress := flag.Bool("dontPrintProgress", false, "don't print progress information")
 	scannerTimeout := flag.Duration("scannerTimeout", time.Second*5, "dialer timeout for the tls scanners (uses golang duration format, e.g. 5s)")
 	filter := flag.String("filter", "issuer", "how to filter the CT cache")
+	statsFile := flag.String("statsFile", "", "file to save scan stats out to (subsequent runs will append to the end of the file)")
 	flag.Parse()
 
 	if *filter != "issuer" && *filter != "issuerDeduped" {
@@ -531,6 +556,14 @@ func main() {
 	close(t.entries)
 	t.totalCerts = len(t.entries)
 
-	t.begin()
+	t.run()
+
 	t.printStats()
+	if *statsFile != "" {
+		err := t.saveStats(*statsFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot save stats out to disk: %s\n", err)
+			os.Exit(1)
+		}
+	}
 }
