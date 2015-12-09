@@ -30,6 +30,8 @@ for c in df:
     if c.startswith("Certs"):
         df[c] = (df[c]/df['ProcessedCerts'])*100.0
 
+df['ProblemSum'] = df['NamesDontExist'] + df['NamesUnavailable'] + df['NamesSkipped'] + df['NamesTLSError'] + df['NamesUsingIncompleteChain'] + df['NamesUsingExpiredCert'] + df['NamesUsingWrongCert'] + df['NamesUsingSelfSignedCert'] + df['NamesUsingMiscInvalidCert']
+
 # first plot, adoption info
 fig, axes = plt.subplots()
 axes.plot(df.index, df['CertsUnused'], label='Unused certificates')
@@ -62,6 +64,7 @@ axes3.plot(df.index, df['NamesUsingExpiredCert'], label='Using expired cert')
 axes3.plot(df.index, df['NamesUsingWrongCert'], label='Using wrong cert')
 axes3.plot(df.index, df['NamesUsingSelfSignedCert'], label='Using self signed cert')
 axes3.plot(df.index, df['NamesUsingMiscInvalidCert'], label='Using misc. invalid cert')
+axes3.plot(df.index, df['ProblemSum'], label='Total')
 lgd3 = axes3.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 
 # fourth plot, cipher suite info
