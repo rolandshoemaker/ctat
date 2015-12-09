@@ -22,21 +22,21 @@ import (
 )
 
 var suiteToString = map[uint16]string{
-	0x0005: "TLS RSA WITH RC4 128 SHA",
-	0x000a: "TLS RSA WITH 3DES EDE CBC SHA",
-	0x002f: "TLS RSA WITH AES 128 CBC SHA",
-	0x0035: "TLS RSA WITH AES 256 CBC SHA",
-	0xc007: "TLS ECDHE ECDSA WITH RC4 128 SHA",
-	0xc009: "TLS ECDHE ECDSA WITH AES 128 CBC SHA",
-	0xc00a: "TLS ECDHE ECDSA WITH AES 256 CBC SHA",
-	0xc011: "TLS ECDHE RSA WITH RC4 128 SHA",
-	0xc012: "TLS ECDHE RSA WITH 3DES EDE CBC SHA",
-	0xc013: "TLS ECDHE RSA WITH AES 128 CBC SHA",
-	0xc014: "TLS ECDHE RSA WITH AES 256 CBC SHA",
-	0xc02f: "TLS ECDHE RSA WITH AES 128 GCM SHA256",
-	0xc02b: "TLS ECDHE ECDSA WITH AES 128 GCM SHA256",
-	0xc030: "TLS ECDHE RSA WITH AES 256 GCM SHA384",
-	0xc02c: "TLS ECDHE ECDSA WITH AES 256 GCM SHA384",
+	0x0005: "RSA WITH RC4 128 SHA",
+	0x000a: "RSA WITH 3DES EDE CBC SHA",
+	0x002f: "RSA WITH AES 128 CBC SHA",
+	0x0035: "RSA WITH AES 256 CBC SHA",
+	0xc007: "ECDHE ECDSA WITH RC4 128 SHA",
+	0xc009: "ECDHE ECDSA WITH AES 128 CBC SHA",
+	0xc00a: "ECDHE ECDSA WITH AES 256 CBC SHA",
+	0xc011: "ECDHE RSA WITH RC4 128 SHA",
+	0xc012: "ECDHE RSA WITH 3DES EDE CBC SHA",
+	0xc013: "ECDHE RSA WITH AES 128 CBC SHA",
+	0xc014: "ECDHE RSA WITH AES 256 CBC SHA",
+	0xc02f: "ECDHE RSA WITH AES 128 GCM SHA256",
+	0xc02b: "ECDHE ECDSA WITH AES 128 GCM SHA256",
+	0xc030: "ECDHE RSA WITH AES 256 GCM SHA384",
+	0xc02c: "ECDHE ECDSA WITH AES 256 GCM SHA384",
 }
 
 type collectedResults struct {
@@ -276,6 +276,8 @@ func (t *tester) saveStats(filename string) error {
 
 func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	defer atomic.AddInt64(&t.results.ProcessedNames, 1)
+	// XXX: dialer/TLS config should accept all cipher suites (possibly in some weird order?) so
+	// we catch everything
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: t.dialerTimeout}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
 	if err != nil {
 		// this should probably retry on some set of errors :/
