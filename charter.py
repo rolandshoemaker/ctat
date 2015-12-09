@@ -34,20 +34,20 @@ df['ProblemSum'] = df['NamesDontExist'] + df['NamesUnavailable'] + df['NamesSkip
 
 # first plot, adoption info
 fig, axes = plt.subplots()
-axes.plot(df.index, df['CertsUnused'], label='Unused certificates')
-axes.plot(df.index, df['CertsPartiallyUsed'], label='Partially used certificates')
-axes.plot(df.index, df['CertsTotallyUsed'], label='Completed used certificates')
 axes.plot(df.index, df['NamesCertUsed'], label='Names using their certificate')
+axes.plot(df.index, df['CertsTotallyUsed'], label='Completely used certificates')
+axes.plot(df.index, df['CertsPartiallyUsed'], label='Partially used certificates')
+axes.plot(df.index, df['CertsUnused'], label='Unused certificates')
 lgd = axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 
 # second plot, scan info
 fig2, axes2 = plt.subplots()
-l1 = axes2.plot(df.index, df['ProcessedNames'], label='Processed certificates')
-l2 = axes2.plot(df.index, df['ProcessedCerts'], label='Scanned names')
+l1 = axes2.plot(df.index, df['ProcessedNames'], label='Certificates checked')
+l2 = axes2.plot(df.index, df['ProcessedCerts'], label='Names extracted & scanned')
 tickLabels = axes2.get_xticklabels()
 ax2 = axes2.twinx()
 ax2.set_ylabel('Hours')
-l3 = ax2.plot(df.index, df['Scan took'], label='Scan time', linestyle='--', color='black')
+l3 = ax2.plot(df.index, df['Scan took'], label='Scan duration', linestyle='--', color='black')
 
 ls = l1+l2+l3
 labs = [l.get_label() for l in ls]
@@ -86,20 +86,27 @@ vf.plot(ax=axes4)
 lgd4 = axes4.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=3)
 # axes4.set_yscale('log')
 
-for ax in [axes, axes2, axes3, axes4]:
+# fifth plot, feature usage
+fig5, axes5 = plt.subplots()
+axes5.plot(df.index, df['NamesServingSCTs'], label="Names serving SCTs")
+axes5.plot(df.index, df['NamesWithOCSPStapled'], label="Names serving stapled OCSP")
+lgd5 = axes5.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=3)
+
+for ax in [axes, axes2, axes3, axes4, axes5]:
     matplotlib.pyplot.sca(ax)
     plt.xticks(rotation=30, ha='right', visible=True)
     ax.set_xlim(df.index.min(), df.index.max())
     ax.set_xlabel("")
-    ax.grid(False)
+    # ax.grid(False)
 ax2.set_xlim(df.index.min(), df.index.max())
 ax2.set_xlabel("")
 ax2.grid(False)
 from matplotlib.ticker import FormatStrFormatter
-for ax in [axes, axes3, axes4]:
+for ax in [axes, axes3, axes4, axes5]:
     ax.yaxis.set_major_formatter(FormatStrFormatter("%s %%"))
 
 fig.savefig("adoption.png", bbox_extra_artists=(lgd,), bbox_inches='tight')
 fig2.savefig("scan-info.png", bbox_extra_artists=(lgd2,), bbox_inches='tight')
 fig3.savefig("problems.png", bbox_extra_artists=(lgd3,), bbox_inches='tight')
 fig4.savefig("ciphers.png", bbox_extra_artists=(lgd4,), bbox_inches='tight')
+fig5.savefig("features.png", bbox_extra_artists=(lgd5,), bbox_inches='tight')
