@@ -42,12 +42,12 @@ lgd = axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", bor
 
 # second plot, scan info
 fig2, axes2 = plt.subplots()
-l1 = axes2.plot(df.index, df['ProcessedNames'], label='Processed certificates', color='blue')
-l2 = axes2.plot(df.index, df['ProcessedCerts'], label='Scanned names', color='green')
+l1 = axes2.plot(df.index, df['ProcessedNames'], label='Processed certificates')
+l2 = axes2.plot(df.index, df['ProcessedCerts'], label='Scanned names')
 tickLabels = axes2.get_xticklabels()
 ax2 = axes2.twinx()
 ax2.set_ylabel('Hours')
-l3 = ax2.plot(df.index, df['Scan took'], label='Scan time', color='black')
+l3 = ax2.plot(df.index, df['Scan took'], label='Scan time', linestyle='--', color='black')
 
 ls = l1+l2+l3
 labs = [l.get_label() for l in ls]
@@ -64,7 +64,7 @@ axes3.plot(df.index, df['NamesUsingExpiredCert'], label='Using expired cert')
 axes3.plot(df.index, df['NamesUsingWrongCert'], label='Using wrong cert')
 axes3.plot(df.index, df['NamesUsingSelfSignedCert'], label='Using self signed cert')
 axes3.plot(df.index, df['NamesUsingMiscInvalidCert'], label='Using misc. invalid cert')
-axes3.plot(df.index, df['ProblemSum'], label='Total')
+axes3.plot(df.index, df['ProblemSum'], label='Total problems', color='black', linestyle='--')
 lgd3 = axes3.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 
 # fourth plot, cipher suite info
