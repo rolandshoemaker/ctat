@@ -278,7 +278,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 	defer atomic.AddInt64(&t.results.ProcessedNames, 1)
 	// XXX: dialer/TLS config should accept all cipher suites (possibly in some weird order?) so
 	// we catch everything
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: t.dialerTimeout}, "tcp", fmt.Sprintf("%s:443", dnsName), nil)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: t.dialerTimeout}, "tcp", fmt.Sprintf("%s:443", dnsName), &tls.Config{PreferServerCipherSuites: true})
 	if err != nil {
 		// this should probably retry on some set of errors :/
 		if t.debug {
