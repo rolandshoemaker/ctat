@@ -325,7 +325,7 @@ func (t *tester) checkName(dnsName string, expectedFP [32]byte) (r result) {
 		return
 	}
 	r.hostAvailable = true
-	defer conn.Close()
+	conn.Close()
 	state := conn.ConnectionState()
 	if !state.HandshakeComplete {
 		return

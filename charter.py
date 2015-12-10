@@ -42,8 +42,8 @@ lgd = axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", bor
 
 # second plot, scan info
 fig2, axes2 = plt.subplots()
-l1 = axes2.plot(df.index, df['ProcessedNames'], label='Certificates checked')
-l2 = axes2.plot(df.index, df['ProcessedCerts'], label='Names extracted & scanned')
+l1 = axes2.plot(df.index, df['ProcessedCerts'], label='Certificates used')
+l2 = axes2.plot(df.index, df['ProcessedNames'], label='Names extracted & scanned')
 tickLabels = axes2.get_xticklabels()
 ax2 = axes2.twinx()
 ax2.set_ylabel('Hours')
