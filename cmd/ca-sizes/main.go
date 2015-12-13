@@ -15,7 +15,7 @@ import (
 )
 
 func subjectToString(subject pkix.Name) string {
-	return fmt.Sprintf("%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "))
+	return fmt.Sprintf("%s;;%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "), subject.SerialNumber)
 }
 
 type node struct {
@@ -24,7 +24,7 @@ type node struct {
 	issued        int
 	subCASubjects []string
 
-	subCAs      []*node
+	subCAs      map[string]*node
 	issuer      *node
 	totalLeaves int
 	totalSubCAs int
@@ -32,7 +32,7 @@ type node struct {
 
 type holder struct {
 	gMu       *sync.Mutex
-	graph     map[string]*node // ...loose interpretation
+	graph     map[string]*node // ...loose definition
 	pMu       *sync.RWMutex
 	processed map[[32]byte]struct{}
 }
@@ -53,9 +53,9 @@ func (h *holder) addNode(rawCert []byte) {
 	issuer := subjectToString(cert.Issuer)
 	h.gMu.Lock()
 	defer h.gMu.Unlock()
-	if issuer == ";;;;" {
+	if issuer == ";;;;;;" {
 		subject := subjectToString(cert.Subject)
-		if _, present := h.graph[subject]; !present && subject != ";;;;" {
+		if _, present := h.graph[subject]; !present && subject != ";;;;;;" {
 			name := ""
 			if cert.Issuer.CommonName != "" {
 				name = cert.Issuer.CommonName
@@ -64,7 +64,7 @@ func (h *holder) addNode(rawCert []byte) {
 			} else {
 				name = "???"
 			}
-			h.graph[subject] = &node{name: name}
+			h.graph[subject] = &node{name: name, subCAs: make(map[string]*node)}
 		}
 		return
 	}
@@ -77,7 +77,7 @@ func (h *holder) addNode(rawCert []byte) {
 		} else {
 			name = "???"
 		}
-		h.graph[issuer] = &node{name: name}
+		h.graph[issuer] = &node{name: name, subCAs: make(map[string]*node)}
 	}
 
 	h.graph[issuer].issued++
@@ -144,7 +144,7 @@ func (n *node) setTotalSubs() int {
 	subs := len(n.subCAs)
 	for _, sub := range n.subCAs {
 		if sub != n {
-			subs += len(sub.subCAs)
+			subs += sub.setTotalSubs()
 		}
 	}
 	n.totalSubCAs = subs
@@ -157,11 +157,15 @@ func (h *holder) createEdges() int {
 		// n.totalLeaves = n.issued
 		for _, subSubject := range n.subCASubjects {
 			if subNode, present := h.graph[subSubject]; present {
-				if subNode != n {
-					n.subCAs = append(n.subCAs, subNode)
+				if subNode.issuer == nil {
+					subNode.issuer = n
 				}
-				subNode.issuer = n
-				edges++
+				if subNode != n {
+					if _, present := n.subCAs[subSubject]; !present {
+						n.subCAs[subSubject] = subNode
+						edges++
+					}
+				}
 			}
 		}
 	}
@@ -211,10 +215,10 @@ func (r rootSet) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r rootSet) Less(i, j int) bool { return r[i].totalLeaves > r[j].totalLeaves } // actually More but... you know :/
 
 func main() {
-	// filename := "google-pilot.log"
-	filename := "certly.log"
+	filename := "google-pilot.log"
+	// filename := "certly.log"
 
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
+	file, err := os.OpenFile(filename, os.O_RDONLY, 0666)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open CT cache file: %s\n", err)
 		os.Exit(1)
