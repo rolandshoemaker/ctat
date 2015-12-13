@@ -34,7 +34,7 @@ type holder struct {
 	gMu       *sync.Mutex
 	graph     map[string]*node // ...loose interpretation
 	pMu       *sync.RWMutex
-	processed map[[32]byte]bool
+	processed map[[32]byte]struct{}
 }
 
 func (h *holder) addNode(rawCert []byte) {
@@ -86,7 +86,7 @@ func (h *holder) addNode(rawCert []byte) {
 		h.graph[issuer].subCASubjects = append(h.graph[issuer].subCASubjects, subject)
 	}
 	h.pMu.Lock()
-	h.processed[certFP] = true
+	h.processed[certFP] = struct{}{}
 	h.pMu.Unlock()
 }
 
@@ -225,7 +225,7 @@ func main() {
 		gMu:       new(sync.Mutex),
 		pMu:       new(sync.RWMutex),
 		graph:     make(map[string]*node),
-		processed: make(map[[32]byte]bool),
+		processed: make(map[[32]byte]struct{}),
 	}
 	fmt.Printf("Populating graph with nodes...")
 	h.createNodes(file)
