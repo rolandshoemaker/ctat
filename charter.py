@@ -30,7 +30,8 @@ for c in df:
     if c.startswith("Certs"):
         df[c] = (df[c]/df['ProcessedCerts'])*100.0
 
-df['ProblemSum'] = df['NamesDontExist'] + df['NamesUnavailable'] + df['NamesSkipped'] + df['NamesTLSError'] + df['NamesUsingIncompleteChain'] + df['NamesUsingExpiredCert'] + df['NamesUsingWrongCert'] + df['NamesUsingSelfSignedCert'] + df['NamesUsingMiscInvalidCert']
+df['HostProblemSum'] = df['NamesDontExist'] + df['NamesUnavailable'] + df['NamesSkipped']
+df['TLSProblemSum'] = df['NamesTLSError'] + df['NamesUsingIncompleteChain'] + df['NamesUsingExpiredCert'] + df['NamesUsingWrongCert'] + df['NamesUsingSelfSignedCert'] + df['NamesUsingMiscInvalidCert']
 
 # first plot, adoption info
 fig, axes = plt.subplots()
@@ -42,8 +43,8 @@ lgd = axes.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", bor
 
 # second plot, scan info
 fig2, axes2 = plt.subplots()
-l1 = axes2.plot(df.index, df['ProcessedCerts'], label='Certificates used')
-l2 = axes2.plot(df.index, df['ProcessedNames'], label='Names extracted & scanned')
+l1 = axes2.plot(df.index, df['ProcessedCerts'], label='Certificates')
+l2 = axes2.plot(df.index, df['ProcessedNames'], label='DNS names')
 tickLabels = axes2.get_xticklabels()
 ax2 = axes2.twinx()
 ax2.set_ylabel('Hours')
@@ -64,7 +65,8 @@ axes3.plot(df.index, df['NamesUsingExpiredCert'], label='Using expired cert')
 axes3.plot(df.index, df['NamesUsingWrongCert'], label='Using wrong cert')
 axes3.plot(df.index, df['NamesUsingSelfSignedCert'], label='Using self signed cert')
 axes3.plot(df.index, df['NamesUsingMiscInvalidCert'], label='Using misc. invalid cert')
-axes3.plot(df.index, df['ProblemSum'], label='Total problems', color='black', linestyle='--')
+axes3.plot(df.index, df['HostProblemSum'], label='Host problems sum', color='black', linestyle='--')
+axes3.plot(df.index, df['TLSProblemSum'], label='TLS problems sum', color='red', linestyle='--')
 lgd3 = axes3.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", borderaxespad=0., ncol=4)
 
 # fourth plot, cipher suite info
@@ -95,10 +97,10 @@ lgd5 = axes5.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, mode="expand", b
 for ax in [axes, axes2, axes3, axes4, axes5]:
     matplotlib.pyplot.sca(ax)
     plt.xticks(rotation=30, ha='right', visible=True)
-    ax.set_xlim(df.index.min(), df.index.max())
+    # ax.set_xlim(df.index.min(), df.index.max())
     ax.set_xlabel("")
     # ax.grid(False)
-ax2.set_xlim(df.index.min(), df.index.max())
+# ax2.set_xlim(df.index.min(), df.index.max())
 ax2.set_xlabel("")
 ax2.grid(False)
 from matplotlib.ticker import FormatStrFormatter
@@ -110,3 +112,4 @@ fig2.savefig("scan-info.png", bbox_extra_artists=(lgd2,), bbox_inches='tight')
 fig3.savefig("problems.png", bbox_extra_artists=(lgd3,), bbox_inches='tight')
 fig4.savefig("ciphers.png", bbox_extra_artists=(lgd4,), bbox_inches='tight')
 fig5.savefig("features.png", bbox_extra_artists=(lgd5,), bbox_inches='tight')
+

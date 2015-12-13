@@ -1,6 +1,7 @@
 package main
 
 import (
+	// "bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -497,6 +498,14 @@ func (t *tester) loadAndUpdate(logURL, logKey, filename string, dontUpdate bool,
 		}
 	}
 	entriesFile.Seek(0, 0)
+
+	// treeHash, err := entriesFile.HashTree(nil, sth.Size)
+	// if err != nil {
+	// 	return err
+	// }
+	// fmt.Printf("Do hashes match? %b\n", bytes.Compare(treeHash[:], sth.Hash) == 0)
+	// fmt.Printf("STH: %#v\n", sth)
+	// fmt.Printf("Local hash:\t%X\nRemote hash:\t%X\n", treeHash[:], sth.Hash)
 
 	fmt.Println("filtering local cache")
 	t.entries = make(chan *workUnit, sth.Size)
