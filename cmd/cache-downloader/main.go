@@ -39,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Counting entries in local cache...")
+	fmt.Println("counting entries in local cache...")
 	count, err := entriesFile.Count()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to count entries in cache file: %s\n", err)
@@ -55,13 +55,14 @@ func main() {
 				return
 			}
 			started := time.Now()
+			startCount := count
 			for {
 				status, ok = <-statusChan
 				if !ok {
 					return
 				}
 				fmt.Printf("\x1b[80D\x1b[2K")
-				eps := float64(status.Current) / time.Since(started).Seconds()
+				eps := float64(status.Current-startCount) / time.Since(started).Seconds()
 				remaining := status.Length - status.Current
 				fmt.Printf("%.2f%% (%d remaining, eta: %s)", status.Percentage(), remaining, time.Second*time.Duration(float64(remaining)/eps))
 				time.Sleep(250 * time.Millisecond)
