@@ -463,63 +463,29 @@ func (t *tester) filterOnIssuerAndSample(issuerFilter string) func(*ct.EntryAndP
 	return nil
 }
 
-func (t *tester) loadAndUpdate(logURL, logKey, filename string, dontUpdate bool, filterFunc func(*ct.EntryAndPosition, error)) error {
-	pemPublicKey := fmt.Sprintf(`-----BEGIN PUBLIC KEY-----
-%s
------END PUBLIC KEY-----`, logKey)
-	ctLog, err := ct.NewLog(logURL, pemPublicKey)
-	if err != nil {
-		return err
-	}
-
+func (t *tester) loadAndFilter(filename string, filterFunc func(*ct.EntryAndPosition, error)) error {
 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-
 	entriesFile := ct.EntriesFile{file}
-
-	sth, err := ctLog.GetSignedTreeHead()
-	if err != nil {
-		return err
-	}
 
 	count, err := entriesFile.Count()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("local entries: %d, remote entries: %d at %s\n", count, sth.Size, sth.Time.Format(time.ANSIC))
-	if !dontUpdate && count < sth.Size {
-		fmt.Println("updating local cache...")
-		_, err = ctLog.DownloadRange(file, nil, count, sth.Size)
-		if err != nil {
-			return err
-		}
-	}
-	entriesFile.Seek(0, 0)
-
-	// treeHash, err := entriesFile.HashTree(nil, sth.Size)
-	// if err != nil {
-	// 	return err
-	// }
-	// fmt.Printf("Do hashes match? %b\n", bytes.Compare(treeHash[:], sth.Hash) == 0)
-	// fmt.Printf("STH: %#v\n", sth)
-	// fmt.Printf("Local hash:\t%X\nRemote hash:\t%X\n", treeHash[:], sth.Hash)
 
 	fmt.Println("filtering local cache")
-	t.entries = make(chan *workUnit, sth.Size)
+	t.entries = make(chan *workUnit, count)
 	entriesFile.Map(filterFunc)
 	return nil
 }
 
 func main() {
-	logURL := flag.String("logURL", "https://log.certly.io", "url of remote CT log to use")
-	logKey := flag.String("logKey", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2MNvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==", "base64-encoded CT log key")
 	filename := flag.String("cacheFile", "certly.log", "file in which to cache log data.")
 	issuerFilter := flag.String("issuerFilter", "Let's Encrypt Authority X1", "common name of issuer to use as a filter")
 	scanners := flag.Int("scanners", 50, "number of scanner workers to run")
-	dontUpdateCache := flag.Bool("dontUpdateCache", false, "don't update the local log cache")
 	debug := flag.Bool("debug", false, "print lots of error messages")
 	dontPrintProgress := flag.Bool("dontPrintProgress", false, "don't print progress information")
 	scannerTimeout := flag.Duration("scannerTimeout", time.Second*5, "dialer timeout for the tls scanners (uses golang duration format, e.g. 5s)")
@@ -546,14 +512,14 @@ func main() {
 
 	switch *filter {
 	case "issuer":
-		err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, t.filterOnIssuer(*issuerFilter))
+		err := t.loadAndFilter(*filename, t.filterOnIssuer(*issuerFilter))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load, update, and filter the local CT cache file: %s\n", err)
 			os.Exit(1)
 		}
 	case "issuerDeduped":
 		filterFunc, dedup := t.filterOnIssuerAndDedup(*issuerFilter)
-		err := t.loadAndUpdate(*logURL, *logKey, *filename, *dontUpdateCache, filterFunc)
+		err := t.loadAndFilter(*filename, filterFunc)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load, update, and filter the local CT cache file: %s\n", err)
 			os.Exit(1)
