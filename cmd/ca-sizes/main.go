@@ -4,6 +4,9 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -15,26 +18,30 @@ import (
 )
 
 func subjectToString(subject pkix.Name) string {
-	return fmt.Sprintf("%s;;%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "), subject.SerialNumber)
+	return fmt.Sprintf("%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "))
 }
 
 type node struct {
-	name string
+	Name          string
+	Issued        int
+	SubCASubjects map[string]struct{}
 
-	issued        int
-	subCASubjects []string
-
-	subCAs      map[string]*node
+	subCAs      []*node
 	issuer      *node
 	totalLeaves int
 	totalSubCAs int
 }
 
 type holder struct {
+	rootsFile string
+
 	gMu       *sync.Mutex
-	graph     map[string]*node // ...loose definition
+	Graph     map[string]*node // ...loose definition
 	pMu       *sync.RWMutex
 	processed map[[32]byte]struct{}
+
+	CacheFile       string
+	CacheFileOffset int64
 }
 
 func (h *holder) addNode(rawCert []byte) {
@@ -53,9 +60,9 @@ func (h *holder) addNode(rawCert []byte) {
 	issuer := subjectToString(cert.Issuer)
 	h.gMu.Lock()
 	defer h.gMu.Unlock()
-	if issuer == ";;;;;;" {
+	if issuer == ";;;;" {
 		subject := subjectToString(cert.Subject)
-		if _, present := h.graph[subject]; !present && subject != ";;;;;;" {
+		if _, present := h.Graph[subject]; !present && subject != ";;;;" {
 			name := ""
 			if cert.Issuer.CommonName != "" {
 				name = cert.Issuer.CommonName
@@ -64,11 +71,11 @@ func (h *holder) addNode(rawCert []byte) {
 			} else {
 				name = "???"
 			}
-			h.graph[subject] = &node{name: name, subCAs: make(map[string]*node)}
+			h.Graph[subject] = &node{Name: name, SubCASubjects: make(map[string]struct{})}
 		}
 		return
 	}
-	if _, present := h.graph[issuer]; !present {
+	if _, present := h.Graph[issuer]; !present {
 		name := ""
 		if cert.Issuer.CommonName != "" {
 			name = cert.Issuer.CommonName
@@ -77,108 +84,135 @@ func (h *holder) addNode(rawCert []byte) {
 		} else {
 			name = "???"
 		}
-		h.graph[issuer] = &node{name: name, subCAs: make(map[string]*node)}
+		h.Graph[issuer] = &node{Name: name, SubCASubjects: make(map[string]struct{})}
 	}
 
-	h.graph[issuer].issued++
+	h.Graph[issuer].Issued++
 	subject := subjectToString(cert.Subject)
 	if cert.BasicConstraintsValid && cert.IsCA && issuer != subject {
-		h.graph[issuer].subCASubjects = append(h.graph[issuer].subCASubjects, subject)
+		if _, present := h.Graph[issuer].SubCASubjects[subject]; !present {
+			h.Graph[issuer].SubCASubjects[subject] = struct{}{}
+		}
 	}
 	h.pMu.Lock()
 	h.processed[certFP] = struct{}{}
 	h.pMu.Unlock()
 }
 
-var certFiles = []string{"/etc/ssl/certs/ca-certificates.crt"}
-
 func (h *holder) addSystemRoots() {
-	for _, file := range certFiles {
-		data, err := ioutil.ReadFile(file)
-		if err == nil {
-			certs, err := x509.ParseCertificates(data)
-			if err != nil {
-				continue
-			}
-			for _, c := range certs {
-				h.addNode(c.Raw)
-			}
-			return
-		}
+	fmt.Println("adding system root nodes to graph...")
+	startingCount := len(h.Graph)
+	data, err := ioutil.ReadFile(h.rootsFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read roots file: %s\n", err)
+		return
 	}
-	return
+	for {
+		b, r := pem.Decode(data)
+		if b == nil || len(b.Bytes) == 0 {
+			break
+		}
+		h.addNode(b.Bytes)
+		data = r
+	}
+	fmt.Printf("[added %d nodes]\n", len(h.Graph)-startingCount)
 }
 
-func (h *holder) createNodes(entriesFile *os.File) {
+func (h *holder) createNodesFromCT() {
 	// pre-populate roots form system (...)
-	h.addSystemRoots()
+	startingCount := len(h.Graph)
 
-	entries := ct.EntriesFile{entriesFile}
+	fmt.Println("adding nodes from CT cache...")
+	ctFile, err := os.OpenFile(h.CacheFile, os.O_RDONLY, 0666)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open CT cache file: %s\n", err)
+		os.Exit(1)
+	}
+	defer ctFile.Close()
+	entries := ct.EntriesFile{ctFile}
+	if h.CacheFileOffset > 0 {
+		fmt.Printf("moving to offset %d in CT cache file\n", h.CacheFileOffset)
+		_, err := entries.Seek(h.CacheFileOffset, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to move to offset in CT cache file: %s\n", err)
+			os.Exit(1)
+		}
+	}
 	entries.Map(func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
 			// fmt.Println(err)
 			return
 		}
-		// if ent.Entry.Type != ct.X509Entry {
-		// 	return
-		// }
+		if ent.Entry.Type != ct.X509Entry {
+			return
+		}
 		h.addNode(ent.Entry.X509Cert)
 		for _, extraCert := range ent.Entry.ExtraCerts {
 			h.addNode(extraCert)
 		}
 	})
+	currentPos, err := entries.Seek(0, 1) // seek to where we are now to get current position
+	if err != nil {
+		fmt.Printf("failed to get current position in CT cache file: %s\n", err)
+	} else {
+		h.CacheFileOffset = currentPos
+	}
+	fmt.Printf("[added %d nodes]\n", len(h.Graph)-startingCount)
 }
 
-func (n *node) setTotalLeaves() int {
-	leaves := n.issued
+func (n *node) setTotalLeaves(visited map[*node]struct{}) int {
+	visited[n] = struct{}{}
+	leaves := n.Issued
 	for _, sub := range n.subCAs {
-		if sub != n {
-			leaves += sub.setTotalLeaves()
+		if _, beenThere := visited[sub]; sub != n && !beenThere {
+			leaves += sub.setTotalLeaves(visited)
 		}
 	}
 	n.totalLeaves = leaves
 	return leaves
 }
 
-func (n *node) setTotalSubs() int {
+func (n *node) setTotalSubs(visited map[*node]struct{}) int {
+	visited[n] = struct{}{}
 	subs := len(n.subCAs)
 	for _, sub := range n.subCAs {
-		if sub != n {
-			subs += sub.setTotalSubs()
+		if _, beenThere := visited[sub]; sub != n && !beenThere {
+			subs += sub.setTotalSubs(visited)
 		}
 	}
 	n.totalSubCAs = subs
 	return subs
 }
 
-func (h *holder) createEdges() int {
+func (h *holder) createEdges() {
+	fmt.Println("creating edges...")
 	edges := 0
-	for _, n := range h.graph {
+	for _, n := range h.Graph {
 		// n.totalLeaves = n.issued
-		for _, subSubject := range n.subCASubjects {
-			if subNode, present := h.graph[subSubject]; present {
+		for subSubject := range n.SubCASubjects {
+			if subNode, present := h.Graph[subSubject]; present {
 				if subNode.issuer == nil {
 					subNode.issuer = n
 				}
 				if subNode != n {
-					if _, present := n.subCAs[subSubject]; !present {
-						n.subCAs[subSubject] = subNode
-						edges++
-					}
+					n.subCAs = append(n.subCAs, subNode)
+					edges++
 				}
 			}
 		}
 	}
-	for _, n := range h.graph {
+	fmt.Printf("[created %d edges]\n", edges)
+	fmt.Println("calculating cumulative leaves and sub CAs...")
+	for _, n := range h.Graph {
 		if n.issuer == nil || n.issuer == n {
-			n.setTotalLeaves()
-			n.setTotalSubs()
+			n.setTotalLeaves(make(map[*node]struct{}))
+			n.setTotalSubs(make(map[*node]struct{}))
 		}
 	}
-	return edges
 }
 
-func (n *node) print(indent int) {
+func (n *node) print(indent int, visited map[*node]struct{}) {
+	visited[n] = struct{}{}
 	var info string
 	if indent > 0 {
 		info = strings.Repeat("  ", indent) + "∟"
@@ -188,10 +222,10 @@ func (n *node) print(indent int) {
 	info = fmt.Sprintf(
 		"%s %s, Direct leaves: %d",
 		info,
-		n.name,
-		n.issued,
+		n.Name,
+		n.Issued,
 	)
-	if n.totalLeaves > n.issued {
+	if n.totalLeaves > n.Issued {
 		info = fmt.Sprintf("%s, Total leaves: %d", info, n.totalLeaves)
 	}
 	if len(n.subCAs) > 0 {
@@ -202,8 +236,8 @@ func (n *node) print(indent int) {
 	}
 	fmt.Println(info)
 	for _, sub := range n.subCAs {
-		if sub != n {
-			sub.print(indent + 1)
+		if _, beenThere := visited[sub]; sub != n && !beenThere {
+			sub.print(indent+1, visited)
 		}
 	}
 }
@@ -215,33 +249,57 @@ func (r rootSet) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r rootSet) Less(i, j int) bool { return r[i].totalLeaves > r[j].totalLeaves } // actually More but... you know :/
 
 func main() {
-	filename := "google-pilot.log"
+	// filename := "google-pilot.log"
 	// filename := "certly.log"
-
-	file, err := os.OpenFile(filename, os.O_RDONLY, 0666)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open CT cache file: %s\n", err)
-		os.Exit(1)
-	}
-	defer file.Close()
+	ctCacheFile := flag.String("cacheFile", "google-pilot.log", "path to local CT cache file")
+	rootsFile := flag.String("rootsFile", "/etc/ssl/certs/ca-certificates.crt", "path to file containg PEM encoded root certificates to prepopulate graph with")
+	graphFile := flag.String("graphFile", "graph.json", "path to file to store aggregated graph data, CT cache file path, and curren cache offset")
+	flag.Parse()
 
 	h := holder{
+		rootsFile: *rootsFile,
 		gMu:       new(sync.Mutex),
 		pMu:       new(sync.RWMutex),
-		graph:     make(map[string]*node),
+		Graph:     make(map[string]*node),
 		processed: make(map[[32]byte]struct{}),
+		CacheFile: *ctCacheFile,
 	}
-	fmt.Printf("Populating graph with nodes...")
-	h.createNodes(file)
-	fmt.Printf(" [created %d nodes]\n", len(h.graph))
-	fmt.Printf("Creating Edges...")
-	edges := h.createEdges()
-	fmt.Printf(" [created %d edges]\n", edges)
-	fmt.Printf("\nResults\n\n")
+	if *graphFile != "" {
+		data, err := ioutil.ReadFile(*graphFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to read graph file: %s\n", err)
+			// fix me (fails on non-existent files, should match err)
+			// os.Exit(1)
+		}
+		if len(data) > 0 {
+			fmt.Println("importing data from graph file...")
+			err = json.Unmarshal(data, &h)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to parse graph file: %s\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("[added %d nodes]\n", len(h.Graph))
+		}
+	}
+	h.addSystemRoots()
+	h.createNodesFromCT()
+	h.createEdges()
+	if *graphFile != "" {
+		data, err := json.Marshal(h)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to marshal graph: %s\n", err)
+			os.Exit(1)
+		}
+		err = ioutil.WriteFile(*graphFile, data, 0666)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to write graph file: %s\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// these should probably actually be chosen from a set of system root trusted certs...
 	rs := rootSet{}
-	for _, n := range h.graph {
+	for _, n := range h.Graph {
 		if n.issuer == nil || n.issuer == n { // && n.totalLeaves > 0 {
 			rs = append(rs, n)
 		}
@@ -249,7 +307,7 @@ func main() {
 	sort.Sort(rs)
 	for i, r := range rs {
 		fmt.Printf("# Size rank: %d\n", i+1)
-		r.print(0)
+		r.print(0, make(map[*node]struct{}))
 		fmt.Printf("\n")
 	}
 }
