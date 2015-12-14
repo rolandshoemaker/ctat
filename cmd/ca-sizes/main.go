@@ -22,12 +22,18 @@ func subjectToString(subject pkix.Name) string {
 	return fmt.Sprintf("%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "))
 }
 
+type nodeSet []*node
+
+func (r nodeSet) Len() int           { return len(r) }
+func (r nodeSet) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+func (r nodeSet) Less(i, j int) bool { return r[i].totalLeaves > r[j].totalLeaves } // actually More but... you know :/
+
 type node struct {
 	Name          string
 	Issued        int
 	SubCASubjects map[string]struct{}
 
-	subCAs      []*node
+	subCAs      nodeSet
 	issuer      *node
 	totalLeaves int
 	totalSubCAs int
@@ -59,7 +65,7 @@ func (h *holder) addNode(rawCert []byte) {
 		// fmt.Println(err)
 		return
 	}
-	if !h.IgnoreExpired && time.Now().After(cert.NotAfter) {
+	if h.IgnoreExpired && time.Now().After(cert.NotAfter) {
 		return
 	}
 	issuer := subjectToString(cert.Issuer)
@@ -240,18 +246,13 @@ func (n *node) print(indent int, visited map[*node]struct{}) {
 		info = fmt.Sprintf("%s, Total sub CAs %d", info, n.totalSubCAs)
 	}
 	fmt.Println(info)
+	sort.Sort(n.subCAs)
 	for _, sub := range n.subCAs {
 		if _, beenThere := visited[sub]; sub != n && !beenThere {
 			sub.print(indent+1, visited)
 		}
 	}
 }
-
-type rootSet []*node
-
-func (r rootSet) Len() int           { return len(r) }
-func (r rootSet) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
-func (r rootSet) Less(i, j int) bool { return r[i].totalLeaves > r[j].totalLeaves } // actually More but... you know :/
 
 func main() {
 	// filename := "google-pilot.log"
@@ -305,9 +306,9 @@ func main() {
 	}
 
 	// these should probably actually be chosen from a set of system root trusted certs...
-	rs := rootSet{}
+	rs := nodeSet{}
 	for _, n := range h.Graph {
-		if n.issuer == nil || n.issuer == n { // && n.totalLeaves > 0 {
+		if n.issuer == nil || n.issuer == n {
 			rs = append(rs, n)
 		}
 	}
