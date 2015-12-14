@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	ct "github.com/jsha/certificatetransparency"
 )
@@ -42,6 +43,7 @@ type holder struct {
 
 	CacheFile       string
 	CacheFileOffset int64
+	IgnoreExpired   bool
 }
 
 func (h *holder) addNode(rawCert []byte) {
@@ -55,6 +57,9 @@ func (h *holder) addNode(rawCert []byte) {
 	cert, err := x509.ParseCertificate(rawCert)
 	if err != nil {
 		// fmt.Println(err)
+		return
+	}
+	if !h.IgnoreExpired && time.Now().After(cert.NotAfter) {
 		return
 	}
 	issuer := subjectToString(cert.Issuer)
@@ -254,15 +259,17 @@ func main() {
 	ctCacheFile := flag.String("cacheFile", "google-pilot.log", "path to local CT cache file")
 	rootsFile := flag.String("rootsFile", "/etc/ssl/certs/ca-certificates.crt", "path to file containg PEM encoded root certificates to prepopulate graph with")
 	graphFile := flag.String("graphFile", "graph.json", "path to file to store aggregated graph data, CT cache file path, and curren cache offset")
+	ignoreExpired := flag.Bool("ignoreExpired", false, "ignore expired certificates (both leaves, intermediates, and roots)")
 	flag.Parse()
 
 	h := holder{
-		rootsFile: *rootsFile,
-		gMu:       new(sync.Mutex),
-		pMu:       new(sync.RWMutex),
-		Graph:     make(map[string]*node),
-		processed: make(map[[32]byte]struct{}),
-		CacheFile: *ctCacheFile,
+		rootsFile:     *rootsFile,
+		gMu:           new(sync.Mutex),
+		pMu:           new(sync.RWMutex),
+		Graph:         make(map[string]*node),
+		processed:     make(map[[32]byte]struct{}),
+		CacheFile:     *ctCacheFile,
+		IgnoreExpired: *ignoreExpired,
 	}
 	if *graphFile != "" {
 		data, err := ioutil.ReadFile(*graphFile)
