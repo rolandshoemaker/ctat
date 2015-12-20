@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -18,23 +20,53 @@ import (
 	ct "github.com/jsha/certificatetransparency"
 )
 
-func subjectToString(subject pkix.Name) string {
-	return fmt.Sprintf("%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "))
+func escape(str string) string {
+	return strings.Replace(str, ",", " -", -1)
 }
 
-type nodeSet []*node
+func subjectToString(subject pkix.Name) string {
+	out := []string{}
+	if subject.CommonName != "" {
+		out = append(out, fmt.Sprintf("CN=%s", escape(subject.CommonName)))
+	}
+	if len(subject.Organization) != 0 {
+		out = append(out, fmt.Sprintf("O=[%s]", escape(strings.Join(subject.Organization, " -- "))))
+	}
+	if len(subject.OrganizationalUnit) != 0 {
+		out = append(out, fmt.Sprintf("OU=[%s]", escape(strings.Join(subject.OrganizationalUnit, " -- "))))
+	}
+	if len(subject.Locality) != 0 {
+		out = append(out, fmt.Sprintf("L=[%s]", escape(strings.Join(subject.Locality, " -- "))))
+	}
+	if len(subject.Province) != 0 {
+		out = append(out, fmt.Sprintf("ST=[%s]", escape(strings.Join(subject.Province, " -- "))))
+	}
+	if len(subject.Country) != 0 {
+		out = append(out, fmt.Sprintf("C=[%s]", escape(strings.Join(subject.Country, " -- "))))
+	}
+	return strings.Join(out, "; ")
+	// return fmt.Sprintf("%s;;%s;;%s", subject.CommonName, subject.SerialNumber, strings.Join(append(subject.Country, append(subject.Organization, subject.OrganizationalUnit...)...), " "))
+}
 
-func (r nodeSet) Len() int           { return len(r) }
-func (r nodeSet) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
-func (r nodeSet) Less(i, j int) bool { return r[i].totalLeaves > r[j].totalLeaves } // actually More but... you know :/
+type rootSet []*node
+
+func (r rootSet) Len() int           { return len(r) }
+func (r rootSet) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+func (r rootSet) Less(i, j int) bool { return r[i].totalLeaves > r[j].totalLeaves } // actually More but... you know :/
+
+type leafSet []*node
+
+func (l leafSet) Len() int           { return len(l) }
+func (l leafSet) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
+func (l leafSet) Less(i, j int) bool { return l[i].Issued > l[j].Issued } // actually More but... you know :/
 
 type node struct {
 	Name          string
 	Issued        int
 	SubCASubjects map[string]struct{}
 
-	subCAs      nodeSet
-	issuer      *node
+	subCAs      rootSet
+	issuers     map[*node]struct{}
 	totalLeaves int
 	totalSubCAs int
 }
@@ -42,76 +74,104 @@ type node struct {
 type holder struct {
 	rootsFile string
 
+	rootNodes map[string]struct{}
 	gMu       *sync.Mutex
 	Graph     map[string]*node // ...loose definition
-	pMu       *sync.RWMutex
+	pMu       *sync.Mutex
 	processed map[[32]byte]struct{}
 
 	CacheFile       string
 	CacheFileOffset int64
-	IgnoreExpired   bool
+	IgnoreExpiry    bool
 }
 
-func (h *holder) addNode(rawCert []byte) {
-	certFP := sha256.Sum256(rawCert)
-	h.pMu.RLock()
-	if _, alreadyDone := h.processed[certFP]; alreadyDone {
-		h.pMu.RUnlock()
-		return
+func (h *holder) exportGDF() string {
+	nodes, edgeMap := []string{}, make(map[string]struct{})
+
+	i := 0
+	nodeIDs := make(map[string]int)
+	for _, n := range h.Graph {
+		nodeIDs[n.Name] = i
+		nodes = append(nodes, fmt.Sprintf("%d,%s,%d.0", i, n.Name, n.totalLeaves))
+		i++
 	}
-	h.pMu.RUnlock()
+	for _, n := range h.Graph {
+		id := nodeIDs[n.Name]
+		for _, s := range n.subCAs {
+			edge := fmt.Sprintf("%d,%d", id, nodeIDs[s.Name])
+			if _, present := edgeMap[edge]; !present {
+				edgeMap[edge] = struct{}{}
+			}
+			for issuer := range n.issuers {
+				otherEdge := fmt.Sprintf("%d,%d", nodeIDs[issuer.Name], id)
+				if _, present := edgeMap[otherEdge]; !present {
+					edgeMap[otherEdge] = struct{}{}
+				}
+			}
+		}
+	}
+	edges := []string{}
+	for e := range edgeMap {
+		edges = append(edges, e)
+	}
+	return fmt.Sprintf(
+		"nodedef>name VARCHAR,label VARCHAR,issued DOUBLE\n%s\nedgedef>node1 VARCHAR,node2 VARCHAR\n%s\n",
+		strings.Join(nodes, "\n"),
+		strings.Join(edges, "\n"),
+	)
+}
+
+func (h *holder) addNode(rawCert []byte) *node {
+	certFP := sha256.Sum256(rawCert)
+	h.pMu.Lock()
+	if _, alreadyDone := h.processed[certFP]; alreadyDone {
+		h.pMu.Unlock()
+		return nil
+	}
+	h.processed[certFP] = struct{}{}
+	h.pMu.Unlock()
+
 	cert, err := x509.ParseCertificate(rawCert)
 	if err != nil {
 		// fmt.Println(err)
-		return
+		return nil
 	}
-	if h.IgnoreExpired && time.Now().After(cert.NotAfter) {
-		return
+	if !h.IgnoreExpiry && time.Now().After(cert.NotAfter) {
+		return nil
 	}
 	issuer := subjectToString(cert.Issuer)
+
 	h.gMu.Lock()
 	defer h.gMu.Unlock()
-	if issuer == ";;;;" {
-		subject := subjectToString(cert.Subject)
-		if _, present := h.Graph[subject]; !present && subject != ";;;;" {
-			name := ""
-			if cert.Issuer.CommonName != "" {
-				name = cert.Issuer.CommonName
-			} else if len(cert.Issuer.Organization) > 0 {
-				name = strings.Join(cert.Issuer.Organization, " ")
-			} else {
-				name = "???"
-			}
-			h.Graph[subject] = &node{Name: name, SubCASubjects: make(map[string]struct{})}
+	subject := subjectToString(cert.Subject)
+	n := &node{Name: issuer, SubCASubjects: make(map[string]struct{}), issuers: make(map[*node]struct{})}
+	if issuer == "" && (cert.IsCA && cert.BasicConstraintsValid) {
+		if _, present := h.Graph[subject]; !present && subject != "" {
+			h.Graph[subject] = n
+			return n
 		}
-		return
-	}
-	if _, present := h.Graph[issuer]; !present {
-		name := ""
-		if cert.Issuer.CommonName != "" {
-			name = cert.Issuer.CommonName
-		} else if len(cert.Issuer.Organization) > 0 {
-			name = strings.Join(cert.Issuer.Organization, " ")
-		} else {
-			name = "???"
-		}
-		h.Graph[issuer] = &node{Name: name, SubCASubjects: make(map[string]struct{})}
+		return nil
 	}
 
+	if _, present := h.Graph[issuer]; !present {
+		h.Graph[issuer] = n
+	}
 	h.Graph[issuer].Issued++
-	subject := subjectToString(cert.Subject)
-	if cert.BasicConstraintsValid && cert.IsCA && issuer != subject {
-		if _, present := h.Graph[issuer].SubCASubjects[subject]; !present {
+
+	if cert.BasicConstraintsValid && cert.IsCA {
+		if _, present := h.Graph[subject]; !present {
+			n.Name = subject
+			h.Graph[subject] = n
+		}
+		if _, present := h.Graph[issuer].SubCASubjects[subject]; !present && issuer != subject {
 			h.Graph[issuer].SubCASubjects[subject] = struct{}{}
 		}
 	}
-	h.pMu.Lock()
-	h.processed[certFP] = struct{}{}
-	h.pMu.Unlock()
+	return n
 }
 
-func (h *holder) addSystemRoots() {
-	fmt.Println("adding system root nodes to graph...")
+func (h *holder) addRootsFromFile() {
+	fmt.Printf("adding roots to graph from %s...\n", h.rootsFile)
 	startingCount := len(h.Graph)
 	data, err := ioutil.ReadFile(h.rootsFile)
 	if err != nil {
@@ -125,6 +185,40 @@ func (h *holder) addSystemRoots() {
 		}
 		h.addNode(b.Bytes)
 		data = r
+	}
+	fmt.Printf("[added %d nodes]\n", len(h.Graph)-startingCount)
+}
+
+func (h *holder) addRootsFromLog(logURI string) {
+	fmt.Println("adding roots from CT log")
+	startingCount := len(h.Graph)
+	resp, err := http.Get(fmt.Sprintf("%s/ct/v1/get-roots", logURI))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get CT log roots: %s\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to read CT log roots response: %s\n", err)
+		return
+	}
+	var encodedRoots struct {
+		Certificates []string `json:"certificates"`
+	}
+	err = json.Unmarshal(body, &encodedRoots)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse CT log roots response: %s\n", err)
+		return
+	}
+	for _, encodedRoot := range encodedRoots.Certificates {
+		rawCert, err := base64.StdEncoding.DecodeString(encodedRoot)
+		if err != nil {
+			continue
+		}
+		if n := h.addNode(rawCert); n != nil {
+			h.rootNodes[n.Name] = struct{}{}
+		}
 	}
 	fmt.Printf("[added %d nodes]\n", len(h.Graph)-startingCount)
 }
@@ -202,10 +296,10 @@ func (h *holder) createEdges() {
 		// n.totalLeaves = n.issued
 		for subSubject := range n.SubCASubjects {
 			if subNode, present := h.Graph[subSubject]; present {
-				if subNode.issuer == nil {
-					subNode.issuer = n
-				}
 				if subNode != n {
+					if _, present := subNode.issuers[n]; !present {
+						subNode.issuers[n] = struct{}{}
+					}
 					n.subCAs = append(n.subCAs, subNode)
 					edges++
 				}
@@ -214,10 +308,11 @@ func (h *holder) createEdges() {
 	}
 	fmt.Printf("[created %d edges]\n", edges)
 	fmt.Println("calculating cumulative leaves and sub CAs...")
+	leavesVisited, subsVisited := make(map[*node]struct{}), make(map[*node]struct{})
 	for _, n := range h.Graph {
-		if n.issuer == nil || n.issuer == n {
-			n.setTotalLeaves(make(map[*node]struct{}))
-			n.setTotalSubs(make(map[*node]struct{}))
+		if _, present := h.rootNodes[n.Name]; present {
+			n.setTotalLeaves(leavesVisited)
+			n.setTotalSubs(subsVisited)
 		}
 	}
 }
@@ -225,15 +320,17 @@ func (h *holder) createEdges() {
 func (n *node) print(indent int, visited map[*node]struct{}) {
 	visited[n] = struct{}{}
 	var info string
+	padding := strings.Repeat("  ", indent)
 	if indent > 0 {
-		info = strings.Repeat("  ", indent) + "∟"
+		info = padding + "∟"
 	} else {
 		info = "+"
 	}
 	info = fmt.Sprintf(
-		"%s %s, Direct leaves: %d",
+		"%s %s\n%s  Direct leaves: %d",
 		info,
 		n.Name,
+		padding,
 		n.Issued,
 	)
 	if n.totalLeaves > n.Issued {
@@ -245,6 +342,9 @@ func (n *node) print(indent int, visited map[*node]struct{}) {
 	if n.totalSubCAs > len(n.subCAs) {
 		info = fmt.Sprintf("%s, Total sub CAs %d", info, n.totalSubCAs)
 	}
+	if len(n.issuers) > 1 {
+		info = fmt.Sprintf("%s [Cross-signed by %d other parents]", info, len(n.issuers)-1)
+	}
 	fmt.Println(info)
 	sort.Sort(n.subCAs)
 	for _, sub := range n.subCAs {
@@ -255,22 +355,22 @@ func (n *node) print(indent int, visited map[*node]struct{}) {
 }
 
 func main() {
-	// filename := "google-pilot.log"
-	// filename := "certly.log"
 	ctCacheFile := flag.String("cacheFile", "google-pilot.log", "path to local CT cache file")
-	rootsFile := flag.String("rootsFile", "/etc/ssl/certs/ca-certificates.crt", "path to file containg PEM encoded root certificates to prepopulate graph with")
+	rootsFile := flag.String("rootsFile", "", "path to file containg PEM encoded root certificates to prepopulate graph with")
+	logURI := flag.String("logURI", "", "URI for a CT log to pull roots from to prepopulate graph with")
 	graphFile := flag.String("graphFile", "graph.json", "path to file to store aggregated graph data, CT cache file path, and curren cache offset")
-	ignoreExpired := flag.Bool("ignoreExpired", false, "ignore expired certificates (both leaves, intermediates, and roots)")
+	ignoreExpiry := flag.Bool("ignoreExpiry", false, "include expired certificates (both leaves, intermediates, and roots)")
 	flag.Parse()
 
 	h := holder{
-		rootsFile:     *rootsFile,
-		gMu:           new(sync.Mutex),
-		pMu:           new(sync.RWMutex),
-		Graph:         make(map[string]*node),
-		processed:     make(map[[32]byte]struct{}),
-		CacheFile:     *ctCacheFile,
-		IgnoreExpired: *ignoreExpired,
+		rootsFile:    *rootsFile,
+		rootNodes:    make(map[string]struct{}),
+		gMu:          new(sync.Mutex),
+		pMu:          new(sync.Mutex),
+		Graph:        make(map[string]*node),
+		processed:    make(map[[32]byte]struct{}),
+		CacheFile:    *ctCacheFile,
+		IgnoreExpiry: *ignoreExpiry,
 	}
 	if *graphFile != "" {
 		data, err := ioutil.ReadFile(*graphFile)
@@ -286,10 +386,18 @@ func main() {
 				fmt.Fprintf(os.Stderr, "failed to parse graph file: %s\n", err)
 				os.Exit(1)
 			}
+			for _, n := range h.Graph {
+				n.issuers = make(map[*node]struct{})
+			}
 			fmt.Printf("[added %d nodes]\n", len(h.Graph))
 		}
 	}
-	h.addSystemRoots()
+	if *rootsFile != "" {
+		h.addRootsFromFile()
+	}
+	if *logURI != "" {
+		h.addRootsFromLog(*logURI)
+	}
 	h.createNodesFromCT()
 	h.createEdges()
 	if *graphFile != "" {
@@ -305,17 +413,37 @@ func main() {
 		}
 	}
 
+	// fmt.Println(h.exportGDF())
+	// os.Exit(0)
+
 	// these should probably actually be chosen from a set of system root trusted certs...
-	rs := nodeSet{}
+	rs := rootSet{}
+	ls := leafSet{}
 	for _, n := range h.Graph {
-		if n.issuer == nil || n.issuer == n {
+		if _, present := h.rootNodes[n.Name]; present {
 			rs = append(rs, n)
+		}
+		if len(n.subCAs) == 0 && n.Issued > 1000 {
+			ls = append(ls, n)
 		}
 	}
 	sort.Sort(rs)
-	for i, r := range rs {
+	sort.Sort(ls)
+	fmt.Printf("## CA hierarchies sorted by total leaves below the root\n\n")
+	visited := make(map[*node]struct{})
+	i := 0
+	for _, r := range rs {
+		if _, beenThere := visited[r]; beenThere {
+			continue
+		}
 		fmt.Printf("# Size rank: %d\n", i+1)
-		r.print(0, make(map[*node]struct{}))
+		r.print(0, visited)
 		fmt.Printf("\n")
+		i++
+	}
+
+	fmt.Printf("## Largest issuers with no sub CAs (with > 1000 leaves)\n\n")
+	for i, l := range ls {
+		fmt.Printf("  Rank %d:\t%d\t%s\n", i+1, l.Issued, l.Name)
 	}
 }

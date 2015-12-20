@@ -475,6 +475,7 @@ func (t *tester) loadAndFilter(filename string, filterFunc func(*ct.EntryAndPosi
 	if err != nil {
 		return err
 	}
+	entriesFile.Seek(0, 0)
 
 	fmt.Println("filtering local cache")
 	t.entries = make(chan *workUnit, count)
