@@ -115,7 +115,7 @@ func (h *holder) exportGDF() string {
 		edges = append(edges, e)
 	}
 	return fmt.Sprintf(
-		"nodedef>name VARCHAR,label VARCHAR,issued DOUBLE\n%s\nedgedef>node1 VARCHAR,node2 VARCHAR\n%s\n",
+		"nodedef>name VARCHAR,label VARCHAR,totalChildLeaves DOUBLE\n%s\nedgedef>node1 VARCHAR,node2 VARCHAR\n%s\n",
 		strings.Join(nodes, "\n"),
 		strings.Join(edges, "\n"),
 	)
