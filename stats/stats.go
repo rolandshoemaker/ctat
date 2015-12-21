@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -61,18 +62,30 @@ func ParsingErrors(cacheFile string, filtersString string) error {
 	return nil
 }
 
-type validityPeriod struct {
-	period int
-	count  int
+type bucket struct {
+	value int
+	count int
 }
 
-type validityDistribution []validityPeriod
+type distribution []bucket
 
-func (v validityDistribution) Len() int           { return len(v) }
-func (v validityDistribution) Swap(i, j int)      { v[i], v[j] = v[j], v[i] }
-func (v validityDistribution) Less(i, j int) bool { return v[i].period < v[j].period }
+func (d distribution) Len() int           { return len(d) }
+func (d distribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
+func (d distribution) Less(i, j int) bool { return d[i].value < d[j].value }
 
-func ValidityDist(cacheFile string, filtersString string, resolution string) error {
+func (d distribution) print(valueLabel string, sum int) {
+	w := new(tabwriter.Writer)
+	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
+	maxWidth := 100.0
+	for _, b := range d {
+		percent := float64(b.count) / float64(sum)
+		fmt.Fprintf(w, "%d\t%.4f%%\t%d\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
+	}
+	w.Flush()
+}
+
+func ValidityDist(cacheFile string, filtersString string, resolution string, countCutoff int) error {
 	entries, err := common.LoadCacheFile(cacheFile)
 	if err != nil {
 		return err
@@ -114,25 +127,120 @@ func ValidityDist(cacheFile string, filtersString string, resolution string) err
 		validity[period]++
 	})
 
-	dist := validityDistribution{}
+	dist := distribution{}
 	sum := 0
 	for k, v := range validity {
-		dist = append(dist, validityPeriod{count: v, period: k})
-		sum += v
+		if v > countCutoff {
+			dist = append(dist, bucket{count: v, value: k})
+			sum += v
+		}
 	}
 	sort.Sort(dist)
 
 	fmt.Println("# Validity distribution by", resolution)
+	dist.print(fmt.Sprintf("Validity period (%ss)", resolution), sum)
 
-	w := new(tabwriter.Writer)
-	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintf(w, "Count\t\tValidity period (%ss)\n", resolution)
-	maxWidth := 100.0
-	for _, b := range dist {
-		percent := float64(b.count) / float64(sum)
-		fmt.Fprintf(w, "%d\t%.4f%%\t%d\t%s\n", b.count, percent*100.0, b.period, strings.Repeat("*", int(maxWidth*percent)))
+	return nil
+}
+
+func EntryLengthDist(cacheFile string, filtersString string, countCutoff int) error {
+	entries, err := common.LoadCacheFile(cacheFile)
+	if err != nil {
+		return err
 	}
-	w.Flush()
+
+	lMu := new(sync.Mutex)
+	lengths := make(map[int]int)
+	var filters []filter.Filter
+	if filtersString != "" {
+		filters, err = filter.StringToFilters(filtersString)
+		if err != nil {
+			return err
+		}
+	}
+
+	entries.Map(func(ent *ct.EntryAndPosition, err error) {
+		if err != nil {
+			return
+		}
+		_, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
+		if skip || err != nil {
+			return
+		}
+
+		chainLen := len(ent.Entry.ExtraCerts) + 1
+		lMu.Lock()
+		defer lMu.Unlock()
+		if _, present := lengths[chainLen]; !present {
+			lengths[chainLen] = 0
+		}
+		lengths[chainLen]++
+	})
+
+	fmt.Println(lengths)
+	dist := distribution{}
+	sum := 0
+	for k, v := range lengths {
+		if v > countCutoff {
+			dist = append(dist, bucket{count: v, value: k})
+			sum += v
+		}
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Entry length distribution")
+	dist.print("Num certificates", sum)
+
+	return nil
+}
+
+func CertSizeDist(cacheFile string, filtersString string, countCutoff int, resolution int) error {
+	entries, err := common.LoadCacheFile(cacheFile)
+	if err != nil {
+		return err
+	}
+
+	sMu := new(sync.Mutex)
+	sizes := make(map[int]int)
+	var filters []filter.Filter
+	if filtersString != "" {
+		filters, err = filter.StringToFilters(filtersString)
+		if err != nil {
+			return err
+		}
+	}
+
+	factor := math.Pow(10, float64(resolution))
+	entries.Map(func(ent *ct.EntryAndPosition, err error) {
+		if err != nil {
+			return
+		}
+		_, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
+		if skip || err != nil {
+			return
+		}
+
+		certSize := int(math.Ceil(float64(len(ent.Entry.X509Cert))/factor)) * int(factor)
+		sMu.Lock()
+		defer sMu.Unlock()
+		if _, present := sizes[certSize]; !present {
+			sizes[certSize] = 0
+		}
+		sizes[certSize]++
+	})
+
+	dist := distribution{}
+	sum := 0
+	for k, v := range sizes {
+		if v > countCutoff {
+			dist = append(dist, bucket{count: v, value: k})
+			sum += v
+		}
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Certificate size distribution")
+	dist.print("Size (bytes)", sum)
 
 	return nil
 }
