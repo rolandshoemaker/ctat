@@ -2,6 +2,7 @@ package graph
 
 import (
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rolandshoemaker/ctat/common"
 	"github.com/rolandshoemaker/ctat/filter"
@@ -30,11 +32,15 @@ type node struct {
 	Issued          int
 	SubCASubjects   map[string]struct{}
 	InitialRootNode bool
+	NotAfter        time.Time
+	OCSPStatus      string
+	SeenCert        bool
 
 	subCAs      rootSet
 	issuers     map[*node]struct{}
 	totalLeaves int
 	totalSubCAs int
+	certificate *x509.Certificate
 }
 
 func (n *node) setChainProperties(visited map[*node]struct{}) (int, int) {
@@ -91,6 +97,16 @@ func (n *node) print(indent int, visited map[*node]struct{}) {
 	}
 }
 
+func (n *node) remove(graph IssuerGraph) {
+	for _, sub := range n.subCAs {
+		delete(sub.issuers, n)
+		if len(sub.issuers) == 0 && sub != n {
+			sub.remove(graph)
+		}
+	}
+	delete(graph, n.Name)
+}
+
 type IssuerGraph map[string]*node // ...loose definition
 
 func LoadGraph(filename string) (IssuerGraph, error) {
@@ -114,11 +130,16 @@ func LoadGraph(filename string) (IssuerGraph, error) {
 func (g IssuerGraph) PrintLineages() {
 	visited := make(map[*node]struct{})
 	rs := rootSet{}
+	impliedNodes := 0
 	for _, n := range g {
 		if n.InitialRootNode {
 			rs = append(rs, n)
 		}
+		if !n.SeenCert {
+			impliedNodes++
+		}
 	}
+	fmt.Printf("!! There were %d nodes only implied by a issued leaf !!\n", impliedNodes)
 	sort.Sort(rs)
 	i := 1
 	for _, r := range rs {
@@ -193,6 +214,12 @@ func (g IssuerGraph) createEdges() {
 	}
 }
 
+func (g IssuerGraph) removeRevokedNodes() {
+	// for _, n := range g {
+
+	// }
+}
+
 type builder struct {
 	filters []filter.Filter
 
@@ -201,14 +228,16 @@ type builder struct {
 
 	gMu   *sync.Mutex
 	graph IssuerGraph
+
+	verbose bool
 }
 
-func (b *builder) addRootsFromFile(rootsFile string) {
-	fmt.Printf("adding roots to graph from %s...\n", rootsFile)
+func (b *builder) addAnchorsFromFile(anchorsFile string) {
+	fmt.Printf("adding trust anchors to graph from %s...\n", anchorsFile)
 	startingCount := len(b.graph)
-	data, err := ioutil.ReadFile(rootsFile)
+	data, err := ioutil.ReadFile(anchorsFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read roots file: %s\n", err)
+		fmt.Fprintf(os.Stderr, "failed to read trust anchors file: %s\n", err)
 		return
 	}
 	for {
@@ -224,7 +253,7 @@ func (b *builder) addRootsFromFile(rootsFile string) {
 	fmt.Printf("[added %d nodes]\n", len(b.graph)-startingCount)
 }
 
-func (b *builder) addRootsFromLog(logURI string) {
+func (b *builder) addAnchorsFromLog(logURI string) {
 	fmt.Println("adding roots from CT log")
 	startingCount := len(b.graph)
 	resp, err := http.Get(fmt.Sprintf("%s/ct/v1/get-roots", logURI))
@@ -268,22 +297,29 @@ func (b *builder) addNode(rawCert []byte) *node {
 	b.processed[certFP] = struct{}{}
 	b.pMu.Unlock()
 
-	cert, skip, err := common.ParseAndFilter(rawCert, nil)
+	cert, skip, err := common.ParseAndFilter(rawCert, b.filters)
 	if skip || err != nil {
-		// if verbose print error
+		if err != nil {
+			if b.verbose {
+				fmt.Fprintf(os.Stderr, "error while filtering entries: %s\n", err)
+			}
+		}
 		return nil
 	}
-	issuer := common.SubjectToString(cert.Issuer)
 
+	issuer := common.SubjectToString(cert.Issuer)
 	if issuer == "???" {
-		// if verbose print error
+		// idk when this would happen but... w/e
+		if b.verbose {
+			fmt.Fprintf(os.Stderr, "certificate had no issuer DN\n")
+		}
 		return nil
 	}
 
 	b.gMu.Lock()
 	defer b.gMu.Unlock()
 	if _, present := b.graph[issuer]; !present {
-		b.graph[issuer] = &node{Name: issuer, SubCASubjects: make(map[string]struct{}), issuers: make(map[*node]struct{})}
+		b.graph[issuer] = &node{Name: issuer, SubCASubjects: make(map[string]struct{})}
 	}
 	i := b.graph[issuer]
 	i.Issued++
@@ -291,14 +327,17 @@ func (b *builder) addNode(rawCert []byte) *node {
 	if cert.BasicConstraintsValid && cert.IsCA {
 		subject := common.SubjectToString(cert.Subject)
 		if subject == "???" {
-			// if verbose print error
+			// idk when this would happen but... w/e
+			fmt.Fprintf(os.Stderr, "certificate had no subject DN\n")
 			return nil
 		}
 		if _, present := i.SubCASubjects[subject]; !present {
 			i.SubCASubjects[subject] = struct{}{}
 		}
-		if _, present := b.graph[subject]; !present {
-			b.graph[subject] = &node{Name: subject, SubCASubjects: make(map[string]struct{}), issuers: make(map[*node]struct{})}
+		if existing, present := b.graph[subject]; !present {
+			b.graph[subject] = &node{Name: subject, SubCASubjects: make(map[string]struct{}), SeenCert: true}
+		} else if present && !existing.SeenCert {
+			existing.SeenCert = true
 		}
 		return b.graph[subject]
 	}
@@ -306,36 +345,47 @@ func (b *builder) addNode(rawCert []byte) *node {
 }
 
 func (b *builder) createNodesFromCT(entries *ct.EntriesFile) {
+	started := time.Now()
 	startingCount := len(b.graph)
 	fmt.Println("adding nodes from CT cache file...")
 	entries.Map(func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
-			// if verbose print error
+			if b.verbose {
+				fmt.Fprintf(os.Stderr, "error parsing ct entry: %s\n", err)
+			}
 			return
 		}
 		if ent.Entry.Type != ct.X509Entry {
 			return
 		}
-		b.addNode(ent.Entry.X509Cert)
 		for _, extraCert := range ent.Entry.ExtraCerts {
 			b.addNode(extraCert)
 		}
+		b.addNode(ent.Entry.X509Cert)
 	})
-	fmt.Printf("[added %d nodes]\n", len(b.graph)-startingCount)
+	fmt.Printf("[added %d nodes]\ntook %s\n", len(b.graph)-startingCount, time.Since(started))
 }
 
-func Build(rootsFile, rootsURI, cacheFile, graphFile string) error {
+func Build(rootsFile, rootsURI, cacheFile, graphFile, filters string, verbose bool) error {
 	b := builder{
+		verbose:   verbose,
 		gMu:       new(sync.Mutex),
 		pMu:       new(sync.Mutex),
 		graph:     make(map[string]*node),
 		processed: make(map[[32]byte]struct{}),
 	}
+	if filters != "" {
+		var err error
+		b.filters, err = filter.StringToFilters(filters)
+		if err != nil {
+			return err
+		}
+	}
 	if rootsFile != "" {
-		b.addRootsFromFile(rootsFile)
+		b.addAnchorsFromFile(rootsFile)
 	}
 	if rootsURI != "" {
-		b.addRootsFromLog(rootsURI)
+		b.addAnchorsFromLog(rootsURI)
 	}
 
 	entries, err := common.LoadCacheFile(cacheFile)

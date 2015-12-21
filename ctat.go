@@ -6,6 +6,7 @@ import (
 
 	"github.com/rolandshoemaker/ctat/downloader"
 	"github.com/rolandshoemaker/ctat/graph"
+	"github.com/rolandshoemaker/ctat/stats"
 
 	"github.com/codegansta/cli"
 )
@@ -15,6 +16,11 @@ func main() {
 	app.Name = "ctat"
 	app.Usage = "tools for analysing data from certificate transparency logs"
 
+	app.Flags = []cli.Flag{
+		cli.BoolFlag{
+			Name: "verbose",
+		},
+	}
 	app.Commands = []cli.Command{
 		{
 			Name:  "download",
@@ -43,8 +49,8 @@ func main() {
 			},
 		},
 		{
-			Name:  "graph",
-			Usage: "Various graph tools",
+			Name:  "ca-graph",
+			Usage: "Various CA graph tools",
 			Subcommands: []cli.Command{
 				{
 					Name:  "build",
@@ -62,13 +68,16 @@ func main() {
 						cli.StringFlag{
 							Name: "rootsURI",
 						},
+						cli.StringFlag{
+							Name: "filters",
+						},
 					},
 					Action: func(c *cli.Context) {
 						if c.String("cacheFile") == "" || c.String("graphFile") == "" {
 							fmt.Fprintf(os.Stderr, "--cacheFile and --graphFile are required\n")
 							os.Exit(1)
 						}
-						err := graph.Build(c.String("rootsFile"), c.String("rootsURI"), c.String("cacheFile"), c.String("graphFile"))
+						err := graph.Build(c.String("rootsFile"), c.String("rootsURI"), c.String("cacheFile"), c.String("graphFile"), c.String("filters"), c.GlobalBool("verbose"))
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "Failed to build CA graph: %s\n", err)
 							os.Exit(1)
@@ -98,7 +107,7 @@ func main() {
 				},
 				{
 					Name:  "export",
-					Usage: "Convert a cache file or JSON graph representation to a GDF graph file",
+					Usage: "Convert a JSON graph representation to a GDF graph file",
 					Flags: []cli.Flag{
 						cli.StringFlag{
 							Name: "graphFile",
@@ -128,6 +137,47 @@ func main() {
 		{
 			Name:  "stats",
 			Usage: "Various cache file analysis tools",
+			Subcommands: []cli.Command{
+				{
+					Name: "parsing-errors",
+					Flags: []cli.Flag{
+						cli.StringFlag{
+							Name: "cacheFile",
+						},
+						cli.StringFlag{
+							Name: "filters",
+						},
+					},
+					Action: func(c *cli.Context) {
+						err := stats.ParsingErrors(c.String("cacheFile"), c.String("filters"))
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
+							os.Exit(1)
+						}
+					},
+				},
+				{
+					Name: "validity-dist",
+					Flags: []cli.Flag{
+						cli.StringFlag{
+							Name: "cacheFile",
+						},
+						cli.StringFlag{
+							Name: "filters",
+						},
+						cli.StringFlag{
+							Name: "resolution",
+						},
+					},
+					Action: func(c *cli.Context) {
+						err := stats.ValidityDist(c.String("cacheFile"), c.String("filters"), c.String("resolution"))
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
+							os.Exit(1)
+						}
+					},
+				},
+			},
 		},
 		{
 			Name:  "scanner",
