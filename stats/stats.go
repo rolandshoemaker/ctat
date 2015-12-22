@@ -69,6 +69,7 @@ var metricsLookup = map[string]metricGenerator{
 	"nameMetrics":  &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
 	"sanSizeDist":  &sanSizeDistribution{sizes: make(map[int]int)},
 	"pkTypeDist":   &pkAlgDistribution{algs: make(map[string]int)},
+	"sigTypeDist":  &sigAlgDistribution{algs: make(map[string]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -125,8 +126,7 @@ type validityDistribution struct {
 }
 
 func (vd *validityDistribution) process(cert *x509.Certificate) {
-	period := 0
-	period = int((cert.NotAfter.Sub(cert.NotBefore)).Hours() / 24 / 30)
+	period := int((cert.NotAfter.Sub(cert.NotBefore)).Hours() / 24 / 30)
 
 	vd.mu.Lock()
 	defer vd.mu.Unlock()
@@ -190,7 +190,10 @@ type pkAlgDistribution struct {
 }
 
 func (pad *pkAlgDistribution) process(cert *x509.Certificate) {
-	alg := pkAlgToString[cert.PublicKeyAlgorithm]
+	alg, ok := pkAlgToString[cert.PublicKeyAlgorithm]
+	if !ok {
+		return
+	}
 	pad.mu.Lock()
 	defer pad.mu.Unlock()
 	if _, present := pad.algs[alg]; !present {
@@ -209,6 +212,53 @@ func (pad *pkAlgDistribution) print() {
 	sort.Sort(dist)
 
 	fmt.Println("# Public key type distribution")
+	dist.print("Type", sum)
+}
+
+var sigAlgToString = map[x509.SignatureAlgorithm]string{
+	0:  "Unknown",
+	1:  "MD2 With RSA",
+	2:  "MD5 With RSA",
+	3:  "SHA1 With RSA",
+	4:  "SHA256 With RSA",
+	5:  "SHA384 With RSA",
+	6:  "SHA512 With RSA",
+	7:  "DSA With SHA1",
+	8:  "DSA With SHA256",
+	9:  "ECDSA With SHA1",
+	10: "ECDSA With SHA256",
+	11: "ECDSA With SHA384",
+	12: "ECDSA With SHA512",
+}
+
+type sigAlgDistribution struct {
+	algs map[string]int
+	mu   sync.Mutex
+}
+
+func (sad *sigAlgDistribution) process(cert *x509.Certificate) {
+	alg, ok := sigAlgToString[cert.SignatureAlgorithm]
+	if !ok {
+		return
+	}
+	sad.mu.Lock()
+	defer sad.mu.Unlock()
+	if _, present := sad.algs[alg]; !present {
+		sad.algs[alg] = 0
+	}
+	sad.algs[alg]++
+}
+
+func (sad *sigAlgDistribution) print() {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range sad.algs {
+		dist = append(dist, strBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Signature type distribution")
 	dist.print("Type", sum)
 }
 
@@ -295,9 +345,15 @@ func Analyse(cacheFile string, filtersString string, generators []metricGenerato
 			return
 		}
 		// execute leaf metric generators
+		wg := new(sync.WaitGroup)
 		for _, g := range generators {
-			g.process(cert)
+			wg.Add(1)
+			go func(mg metricGenerator) {
+				mg.process(cert)
+				wg.Done()
+			}(g)
 		}
+		wg.Wait()
 	})
 
 	for _, g := range generators {
@@ -307,3 +363,7 @@ func Analyse(cacheFile string, filtersString string, generators []metricGenerato
 
 	return nil
 }
+
+// features usage metrics
+// CT extension OID     -- 1.3.6.1.4.1.11129.2.4.2
+// OCSP must staple OID -- 1.3.6.1.5.5.7.1.24
