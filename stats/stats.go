@@ -64,12 +64,13 @@ func (d strDistribution) print(valueLabel string, sum int) {
 }
 
 var metricsLookup = map[string]metricGenerator{
-	"validityDist": &validityDistribution{periods: make(map[int]int)},
-	"certSizeDist": &certSizeDistribution{sizes: make(map[int]int)},
-	"nameMetrics":  &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
-	"sanSizeDist":  &sanSizeDistribution{sizes: make(map[int]int)},
-	"pkTypeDist":   &pkAlgDistribution{algs: make(map[string]int)},
-	"sigTypeDist":  &sigAlgDistribution{algs: make(map[string]int)},
+	"validityDist":      &validityDistribution{periods: make(map[int]int)},
+	"certSizeDist":      &certSizeDistribution{sizes: make(map[int]int)},
+	"nameMetrics":       &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
+	"sanSizeDist":       &sanSizeDistribution{sizes: make(map[int]int)},
+	"pkTypeDist":        &pkAlgDistribution{algs: make(map[string]int)},
+	"sigTypeDist":       &sigAlgDistribution{algs: make(map[string]int)},
+	"serialEntropyDist": &serialEntropyDistribution{entropy: make(map[int]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -260,6 +261,42 @@ func (sad *sigAlgDistribution) print() {
 
 	fmt.Println("# Signature type distribution")
 	dist.print("Type", sum)
+}
+
+type serialEntropyDistribution struct {
+	entropy map[int]int
+	mu      sync.Mutex
+}
+
+func (sed *serialEntropyDistribution) process(cert *x509.Certificate) {
+	byteMap := make(map[byte]int)
+	total := len(cert.SerialNumber.Bytes())
+	for _, b := range cert.SerialNumber.Bytes() {
+		byteMap[b]++
+	}
+	entropy := 0.0
+	for b := range byteMap {
+		p := float64(byteMap[b]) / float64(total)
+		entropy -= p * math.Log2(p)
+	}
+	e := int(entropy * 8)
+
+	sed.mu.Lock()
+	defer sed.mu.Unlock()
+	sed.entropy[e]++
+}
+
+func (sed *serialEntropyDistribution) print() {
+	dist := intDistribution{}
+	sum := 0
+	for k, v := range sed.entropy {
+		dist = append(dist, intBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Serial entropy distribution")
+	dist.print("Shannon entropy (bits)", sum)
 }
 
 type nameMetrics struct {
