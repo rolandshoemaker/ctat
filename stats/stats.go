@@ -1,12 +1,14 @@
 package stats
 
 import (
+	"crypto/x509"
 	"fmt"
 	"math"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/tabwriter"
 
 	"github.com/rolandshoemaker/ctat/common"
@@ -14,53 +16,6 @@ import (
 
 	ct "github.com/jsha/certificatetransparency"
 )
-
-func ParsingErrors(cacheFile string, filtersString string) error {
-	entries, err := common.LoadCacheFile(cacheFile)
-	if err != nil {
-		return err
-	}
-	cMu := new(sync.Mutex)
-	ctErrors := make(map[string]int)
-	xMu := new(sync.Mutex)
-	x509Errors := make(map[string]int)
-	var filters []filter.Filter
-	if filtersString != "" {
-		filters, err = filter.StringToFilters(filtersString)
-		if err != nil {
-			return err
-		}
-	}
-
-	entries.Map(func(ent *ct.EntryAndPosition, err error) {
-		if err != nil {
-			cMu.Lock()
-			if _, present := ctErrors[err.Error()]; !present {
-				ctErrors[err.Error()] = 0
-			}
-			ctErrors[err.Error()]++
-			cMu.Unlock()
-		}
-		if _, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters); !skip && err != nil {
-			xMu.Lock()
-			if _, present := x509Errors[err.Error()]; present {
-				x509Errors[err.Error()] = 0
-			}
-			x509Errors[err.Error()]++
-			xMu.Unlock()
-		}
-	})
-
-	fmt.Println("# CT parsing errors")
-	for k, v := range ctErrors {
-		fmt.Printf("\t%d\t%s\n", v, k)
-	}
-	fmt.Println("\n# X509 parsing errors")
-	for k, v := range x509Errors {
-		fmt.Printf("%d\t%s\n", v, k)
-	}
-	return nil
-}
 
 type bucket struct {
 	value int
@@ -85,162 +40,169 @@ func (d distribution) print(valueLabel string, sum int) {
 	w.Flush()
 }
 
-func ValidityDist(cacheFile string, filtersString string, resolution string, countCutoff int) error {
-	entries, err := common.LoadCacheFile(cacheFile)
-	if err != nil {
-		return err
-	}
+var metrics = map[string]metricGenerator{}
 
-	vMu := new(sync.Mutex)
-	validity := make(map[int]int)
-	var filters []filter.Filter
-	if filtersString != "" {
-		filters, err = filter.StringToFilters(filtersString)
-		if err != nil {
-			return err
-		}
-	}
-
-	entries.Map(func(ent *ct.EntryAndPosition, err error) {
-		if err != nil {
-			return
-		}
-		cert, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
-		if skip || err != nil {
-			return
-		}
-		period := 0
-		switch resolution {
-		case "hour":
-			period = int((cert.NotAfter.Sub(cert.NotBefore)).Hours())
-		case "day":
-			period = int((cert.NotAfter.Sub(cert.NotBefore)).Hours() / 24)
-		case "month":
-			period = int((cert.NotAfter.Sub(cert.NotBefore)).Hours() / 24 / 30)
-		}
-
-		vMu.Lock()
-		defer vMu.Unlock()
-		if _, present := validity[period]; !present {
-			validity[period] = 0
-		}
-		validity[period]++
-	})
-
-	dist := distribution{}
-	sum := 0
-	for k, v := range validity {
-		if v > countCutoff {
-			dist = append(dist, bucket{count: v, value: k})
-			sum += v
-		}
-	}
-	sort.Sort(dist)
-
-	fmt.Println("# Validity distribution by", resolution)
-	dist.print(fmt.Sprintf("Validity period (%ss)", resolution), sum)
-
-	return nil
+type metricGenerator interface {
+	process(*x509.Certificate)
+	print()
 }
 
-func EntryLengthDist(cacheFile string, filtersString string, countCutoff int) error {
-	entries, err := common.LoadCacheFile(cacheFile)
-	if err != nil {
-		return err
-	}
-
-	lMu := new(sync.Mutex)
-	lengths := make(map[int]int)
-	var filters []filter.Filter
-	if filtersString != "" {
-		filters, err = filter.StringToFilters(filtersString)
-		if err != nil {
-			return err
-		}
-	}
-
-	entries.Map(func(ent *ct.EntryAndPosition, err error) {
-		if err != nil {
-			return
-		}
-		_, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
-		if skip || err != nil {
-			return
-		}
-
-		chainLen := len(ent.Entry.ExtraCerts) + 1
-		lMu.Lock()
-		defer lMu.Unlock()
-		if _, present := lengths[chainLen]; !present {
-			lengths[chainLen] = 0
-		}
-		lengths[chainLen]++
-	})
-
-	fmt.Println(lengths)
-	dist := distribution{}
-	sum := 0
-	for k, v := range lengths {
-		if v > countCutoff {
-			dist = append(dist, bucket{count: v, value: k})
-			sum += v
-		}
-	}
-	sort.Sort(dist)
-
-	fmt.Println("# Entry length distribution")
-	dist.print("Num certificates", sum)
-
-	return nil
+type certSizeDistribution struct {
+	sizes map[int]int
+	mu    sync.Mutex
 }
 
-func CertSizeDist(cacheFile string, filtersString string, countCutoff int, resolution int) error {
-	entries, err := common.LoadCacheFile(cacheFile)
-	if err != nil {
-		return err
+func (csd *certSizeDistribution) process(cert *x509.Certificate) {
+	certSize := int(math.Ceil(float64(len(cert.Raw))/100)) * int(100)
+	csd.mu.Lock()
+	defer csd.mu.Unlock()
+	if _, present := csd.sizes[certSize]; !present {
+		csd.sizes[certSize] = 0
 	}
+	csd.sizes[certSize]++
+}
 
-	sMu := new(sync.Mutex)
-	sizes := make(map[int]int)
-	var filters []filter.Filter
-	if filtersString != "" {
-		filters, err = filter.StringToFilters(filtersString)
-		if err != nil {
-			return err
-		}
-	}
-
-	factor := math.Pow(10, float64(resolution))
-	entries.Map(func(ent *ct.EntryAndPosition, err error) {
-		if err != nil {
-			return
-		}
-		_, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
-		if skip || err != nil {
-			return
-		}
-
-		certSize := int(math.Ceil(float64(len(ent.Entry.X509Cert))/factor)) * int(factor)
-		sMu.Lock()
-		defer sMu.Unlock()
-		if _, present := sizes[certSize]; !present {
-			sizes[certSize] = 0
-		}
-		sizes[certSize]++
-	})
-
+func (csd *certSizeDistribution) print() {
 	dist := distribution{}
 	sum := 0
-	for k, v := range sizes {
-		if v > countCutoff {
-			dist = append(dist, bucket{count: v, value: k})
-			sum += v
-		}
+	for k, v := range csd.sizes {
+		dist = append(dist, bucket{count: v, value: k})
+		sum += v
 	}
 	sort.Sort(dist)
 
 	fmt.Println("# Certificate size distribution")
 	dist.print("Size (bytes)", sum)
+}
+
+type validityDistribution struct {
+	periods map[int]int
+	mu      sync.Mutex
+}
+
+func (vd *validityDistribution) process(cert *x509.Certificate) {
+	period := 0
+	period = int((cert.NotAfter.Sub(cert.NotBefore)).Hours() / 24 / 30)
+
+	vd.mu.Lock()
+	defer vd.mu.Unlock()
+	if _, present := vd.periods[period]; !present {
+		vd.periods[period] = 0
+	}
+	vd.periods[period]++
+}
+
+func (vd *validityDistribution) print() {
+	dist := distribution{}
+	sum := 0
+	for k, v := range vd.periods {
+		dist = append(dist, bucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Validity period distribution")
+	dist.print("Validity period (months)", sum)
+}
+
+type nameMetrics struct {
+	nMu        sync.Mutex
+	names      map[string]int
+	totalNames int64
+
+	nsMu          sync.Mutex
+	nameSets      map[string]int
+	totalNameSets int64
+}
+
+func (nm *nameMetrics) process(cert *x509.Certificate) {
+	atomic.AddInt64(&nm.totalNameSets, 1)
+	atomic.AddInt64(&nm.totalNames, int64(len(cert.DNSNames)))
+	sort.Strings(cert.DNSNames)
+	nameSet := strings.Join(cert.DNSNames, ",")
+	nm.nsMu.Lock()
+	if _, present := nm.nameSets[nameSet]; !present {
+		nm.nameSets[nameSet] = 0
+	}
+	nm.nameSets[nameSet]++
+	nm.nsMu.Unlock()
+	for _, name := range cert.DNSNames {
+		nm.nMu.Lock()
+		if _, present := nm.names[name]; !present {
+			nm.names[name] = 0
+		}
+		nm.names[name]++
+		nm.nMu.Unlock()
+	}
+}
+
+func (nm *nameMetrics) print() {
+	fmt.Printf("# DNS name metrics\n\n")
+	fmt.Printf("%d names across %d certificates\n", nm.totalNames, nm.totalNameSets)
+	fmt.Printf(
+		"%.2f%% of names existed in multiple certificates\n%.2f%% of certificates had duplicate name sets\n",
+		(1.0-(float64(len(nm.names))/float64(nm.totalNames)))*100.0,
+		(1.0-(float64(len(nm.nameSets))/float64(nm.totalNameSets)))*100.0,
+	)
+}
+
+func Analyse(cacheFile string, filtersString string) error {
+	generators := []metricGenerator{
+		&validityDistribution{periods: make(map[int]int)},
+		&certSizeDistribution{sizes: make(map[int]int)},
+		&nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
+	}
+
+	entries, err := common.LoadCacheFile(cacheFile)
+	if err != nil {
+		return err
+	}
+
+	cMu := new(sync.Mutex)
+	ctErrors := make(map[string]int)
+	xMu := new(sync.Mutex)
+	x509Errors := make(map[string]int)
+	var filters []filter.Filter
+	if filtersString != "" {
+		filters, err = filter.StringToFilters(filtersString)
+		if err != nil {
+			return err
+		}
+	}
+
+	entries.Map(func(ent *ct.EntryAndPosition, err error) {
+		if err != nil {
+			cMu.Lock()
+			if _, present := ctErrors[err.Error()]; !present {
+				ctErrors[err.Error()] = 0
+			}
+			ctErrors[err.Error()]++
+			cMu.Unlock()
+			return
+		}
+		// execute CT entry metric stuff (TODO)
+		cert, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
+		if !skip && err != nil {
+			xMu.Lock()
+			if _, present := x509Errors[err.Error()]; present {
+				x509Errors[err.Error()] = 0
+			}
+			x509Errors[err.Error()]++
+			xMu.Unlock()
+			return
+		} else if err == nil && skip {
+			return
+		}
+		// execute leaf metric generators
+		for _, g := range generators {
+			g.process(cert)
+		}
+	})
+
+	for _, g := range generators {
+		g.print()
+		fmt.Println("")
+	}
 
 	return nil
 }

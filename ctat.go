@@ -139,7 +139,7 @@ func main() {
 			Usage: "Various cache file analysis tools",
 			Subcommands: []cli.Command{
 				{
-					Name: "parsing-errors",
+					Name: "analyse",
 					Flags: []cli.Flag{
 						cli.StringFlag{
 							Name: "cacheFile",
@@ -149,80 +149,7 @@ func main() {
 						},
 					},
 					Action: func(c *cli.Context) {
-						err := stats.ParsingErrors(c.String("cacheFile"), c.String("filters"))
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
-							os.Exit(1)
-						}
-					},
-				},
-				{
-					Name: "validity-dist",
-					Flags: []cli.Flag{
-						cli.StringFlag{
-							Name: "cacheFile",
-						},
-						cli.StringFlag{
-							Name: "filters",
-						},
-						cli.StringFlag{
-							Name: "resolution",
-						},
-						cli.IntFlag{
-							Name:  "countCutoff",
-							Value: 0,
-						},
-					},
-					Action: func(c *cli.Context) {
-						err := stats.ValidityDist(c.String("cacheFile"), c.String("filters"), c.String("resolution"), c.Int("countCutoff"))
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
-							os.Exit(1)
-						}
-					},
-				},
-				{
-					Name: "entry-length-dist",
-					Flags: []cli.Flag{
-						cli.StringFlag{
-							Name: "cacheFile",
-						},
-						cli.StringFlag{
-							Name: "filters",
-						},
-						cli.IntFlag{
-							Name:  "countCutoff",
-							Value: 0,
-						},
-					},
-					Action: func(c *cli.Context) {
-						err := stats.EntryLengthDist(c.String("cacheFile"), c.String("filters"), c.Int("countCutoff"))
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
-							os.Exit(1)
-						}
-					},
-				},
-				{
-					Name: "cert-size-dist",
-					Flags: []cli.Flag{
-						cli.StringFlag{
-							Name: "cacheFile",
-						},
-						cli.StringFlag{
-							Name: "filters",
-						},
-						cli.IntFlag{
-							Name:  "countCutoff",
-							Value: 0,
-						},
-						cli.IntFlag{
-							Name:  "resolution",
-							Value: 3,
-						},
-					},
-					Action: func(c *cli.Context) {
-						err := stats.CertSizeDist(c.String("cacheFile"), c.String("filters"), c.Int("countCutoff"), c.Int("resolution"))
+						err := stats.Analyse(c.String("cacheFile"), c.String("filters"))
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
 							os.Exit(1)
