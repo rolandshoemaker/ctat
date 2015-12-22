@@ -17,18 +17,18 @@ import (
 	ct "github.com/jsha/certificatetransparency"
 )
 
-type bucket struct {
+type intBucket struct {
 	value int
 	count int
 }
 
-type distribution []bucket
+type intDistribution []intBucket
 
-func (d distribution) Len() int           { return len(d) }
-func (d distribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
-func (d distribution) Less(i, j int) bool { return d[i].value < d[j].value }
+func (d intDistribution) Len() int           { return len(d) }
+func (d intDistribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
+func (d intDistribution) Less(i, j int) bool { return d[i].value < d[j].value }
 
-func (d distribution) print(valueLabel string, sum int) {
+func (d intDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
@@ -40,7 +40,51 @@ func (d distribution) print(valueLabel string, sum int) {
 	w.Flush()
 }
 
-var metrics = map[string]metricGenerator{}
+type strBucket struct {
+	value string
+	count int
+}
+
+type strDistribution []strBucket
+
+func (d strDistribution) Len() int           { return len(d) }
+func (d strDistribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
+func (d strDistribution) Less(i, j int) bool { return d[i].value < d[j].value }
+
+func (d strDistribution) print(valueLabel string, sum int) {
+	w := new(tabwriter.Writer)
+	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
+	maxWidth := 100.0
+	for _, b := range d {
+		percent := float64(b.count) / float64(sum)
+		fmt.Fprintf(w, "%d\t%.4f%%\t%s\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
+	}
+	w.Flush()
+}
+
+var metricsLookup = map[string]metricGenerator{
+	"validityDist": &validityDistribution{periods: make(map[int]int)},
+	"certSizeDist": &certSizeDistribution{sizes: make(map[int]int)},
+	"nameMetrics":  &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
+	"sanSizeDist":  &sanSizeDistribution{sizes: make(map[int]int)},
+	"pkTypeDist":   &pkAlgDistribution{algs: make(map[string]int)},
+}
+
+func StringToMetrics(metricsString string) ([]metricGenerator, error) {
+	var metrics []metricGenerator
+	for _, metricName := range strings.Split(metricsString, ",") {
+		if generator, present := metricsLookup[metricName]; present {
+			metrics = append(metrics, generator)
+		} else if !present {
+			return nil, fmt.Errorf("invalid metric name")
+		}
+	}
+	if len(metrics) == 0 {
+		return nil, fmt.Errorf("at least one metric is required to continue")
+	}
+	return metrics, nil
+}
 
 type metricGenerator interface {
 	process(*x509.Certificate)
@@ -63,10 +107,10 @@ func (csd *certSizeDistribution) process(cert *x509.Certificate) {
 }
 
 func (csd *certSizeDistribution) print() {
-	dist := distribution{}
+	dist := intDistribution{}
 	sum := 0
 	for k, v := range csd.sizes {
-		dist = append(dist, bucket{count: v, value: k})
+		dist = append(dist, intBucket{count: v, value: k})
 		sum += v
 	}
 	sort.Sort(dist)
@@ -93,16 +137,79 @@ func (vd *validityDistribution) process(cert *x509.Certificate) {
 }
 
 func (vd *validityDistribution) print() {
-	dist := distribution{}
+	dist := intDistribution{}
 	sum := 0
 	for k, v := range vd.periods {
-		dist = append(dist, bucket{count: v, value: k})
+		dist = append(dist, intBucket{count: v, value: k})
 		sum += v
 	}
 	sort.Sort(dist)
 
 	fmt.Println("# Validity period distribution")
 	dist.print("Validity period (months)", sum)
+}
+
+type sanSizeDistribution struct {
+	sizes map[int]int
+	mu    sync.Mutex
+}
+
+func (ssd *sanSizeDistribution) process(cert *x509.Certificate) {
+	size := len(cert.DNSNames)
+	ssd.mu.Lock()
+	defer ssd.mu.Unlock()
+	if _, present := ssd.sizes[size]; !present {
+		ssd.sizes[size] = 0
+	}
+	ssd.sizes[size]++
+}
+
+func (ssd *sanSizeDistribution) print() {
+	dist := intDistribution{}
+	sum := 0
+	for k, v := range ssd.sizes {
+		dist = append(dist, intBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# SAN num distribution")
+	dist.print("Number of SANs", sum)
+}
+
+var pkAlgToString = map[x509.PublicKeyAlgorithm]string{
+	0: "Unknown",
+	1: "RSA",
+	2: "DSA",
+	3: "ECDSA",
+}
+
+type pkAlgDistribution struct {
+	algs map[string]int
+	mu   sync.Mutex
+}
+
+func (pad *pkAlgDistribution) process(cert *x509.Certificate) {
+	alg := pkAlgToString[cert.PublicKeyAlgorithm]
+	pad.mu.Lock()
+	defer pad.mu.Unlock()
+	if _, present := pad.algs[alg]; !present {
+		pad.algs[alg] = 0
+	}
+	pad.algs[alg]++
+}
+
+func (pad *pkAlgDistribution) print() {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range pad.algs {
+		dist = append(dist, strBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Public key type distribution")
+	dist.print("Type", sum)
 }
 
 type nameMetrics struct {
@@ -146,22 +253,12 @@ func (nm *nameMetrics) print() {
 	)
 }
 
-func Analyse(cacheFile string, filtersString string) error {
-	generators := []metricGenerator{
-		&validityDistribution{periods: make(map[int]int)},
-		&certSizeDistribution{sizes: make(map[int]int)},
-		&nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
-	}
-
+func Analyse(cacheFile string, filtersString string, generators []metricGenerator) error {
 	entries, err := common.LoadCacheFile(cacheFile)
 	if err != nil {
 		return err
 	}
 
-	cMu := new(sync.Mutex)
-	ctErrors := make(map[string]int)
-	xMu := new(sync.Mutex)
-	x509Errors := make(map[string]int)
 	var filters []filter.Filter
 	if filtersString != "" {
 		filters, err = filter.StringToFilters(filtersString)
@@ -170,6 +267,10 @@ func Analyse(cacheFile string, filtersString string) error {
 		}
 	}
 
+	cMu := new(sync.Mutex)
+	ctErrors := make(map[string]int)
+	xMu := new(sync.Mutex)
+	x509Errors := make(map[string]int)
 	entries.Map(func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
 			cMu.Lock()

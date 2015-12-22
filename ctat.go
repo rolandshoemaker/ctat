@@ -135,27 +135,33 @@ func main() {
 			},
 		},
 		{
-			Name:  "stats",
-			Usage: "Various cache file analysis tools",
-			Subcommands: []cli.Command{
-				{
-					Name: "analyse",
-					Flags: []cli.Flag{
-						cli.StringFlag{
-							Name: "cacheFile",
-						},
-						cli.StringFlag{
-							Name: "filters",
-						},
-					},
-					Action: func(c *cli.Context) {
-						err := stats.Analyse(c.String("cacheFile"), c.String("filters"))
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
-							os.Exit(1)
-						}
-					},
+			Name: "analyse",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name: "cacheFile",
 				},
+				cli.StringFlag{
+					Name: "filters",
+				},
+				cli.StringFlag{
+					Name: "leafMetrics",
+				},
+			},
+			Action: func(c *cli.Context) {
+				if c.String("leafMetrics") == "" || c.String("cacheFile") == "" {
+					fmt.Fprintf(os.Stderr, "--cacheFile and --leafMetrics are required\n")
+					os.Exit(1)
+				}
+				metrics, err := stats.StringToMetrics(c.String("leafMetrics"))
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to parse --leafMetrics: %s\n", err)
+					os.Exit(1)
+				}
+				err = stats.Analyse(c.String("cacheFile"), c.String("filters"), metrics)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
+					os.Exit(1)
+				}
 			},
 		},
 		{
