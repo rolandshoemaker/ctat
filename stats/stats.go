@@ -102,9 +102,6 @@ func (csd *certSizeDistribution) process(cert *x509.Certificate) {
 	certSize := int(math.Ceil(float64(len(cert.Raw))/100)) * int(100)
 	csd.mu.Lock()
 	defer csd.mu.Unlock()
-	if _, present := csd.sizes[certSize]; !present {
-		csd.sizes[certSize] = 0
-	}
 	csd.sizes[certSize]++
 }
 
@@ -131,9 +128,6 @@ func (vd *validityDistribution) process(cert *x509.Certificate) {
 
 	vd.mu.Lock()
 	defer vd.mu.Unlock()
-	if _, present := vd.periods[period]; !present {
-		vd.periods[period] = 0
-	}
 	vd.periods[period]++
 }
 
@@ -159,9 +153,6 @@ func (ssd *sanSizeDistribution) process(cert *x509.Certificate) {
 	size := len(cert.DNSNames)
 	ssd.mu.Lock()
 	defer ssd.mu.Unlock()
-	if _, present := ssd.sizes[size]; !present {
-		ssd.sizes[size] = 0
-	}
 	ssd.sizes[size]++
 }
 
@@ -197,9 +188,6 @@ func (pad *pkAlgDistribution) process(cert *x509.Certificate) {
 	}
 	pad.mu.Lock()
 	defer pad.mu.Unlock()
-	if _, present := pad.algs[alg]; !present {
-		pad.algs[alg] = 0
-	}
 	pad.algs[alg]++
 }
 
@@ -244,9 +232,6 @@ func (sad *sigAlgDistribution) process(cert *x509.Certificate) {
 	}
 	sad.mu.Lock()
 	defer sad.mu.Unlock()
-	if _, present := sad.algs[alg]; !present {
-		sad.algs[alg] = 0
-	}
 	sad.algs[alg]++
 }
 
@@ -315,16 +300,10 @@ func (nm *nameMetrics) process(cert *x509.Certificate) {
 	sort.Strings(cert.DNSNames)
 	nameSet := strings.Join(cert.DNSNames, ",")
 	nm.nsMu.Lock()
-	if _, present := nm.nameSets[nameSet]; !present {
-		nm.nameSets[nameSet] = 0
-	}
 	nm.nameSets[nameSet]++
 	nm.nsMu.Unlock()
 	for _, name := range cert.DNSNames {
 		nm.nMu.Lock()
-		if _, present := nm.names[name]; !present {
-			nm.names[name] = 0
-		}
 		nm.names[name]++
 		nm.nMu.Unlock()
 	}
@@ -361,9 +340,6 @@ func Analyse(cacheFile string, filtersString string, generators []metricGenerato
 	entries.Map(func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
 			cMu.Lock()
-			if _, present := ctErrors[err.Error()]; !present {
-				ctErrors[err.Error()] = 0
-			}
 			ctErrors[err.Error()]++
 			cMu.Unlock()
 			return
@@ -372,9 +348,6 @@ func Analyse(cacheFile string, filtersString string, generators []metricGenerato
 		cert, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
 		if !skip && err != nil {
 			xMu.Lock()
-			if _, present := x509Errors[err.Error()]; present {
-				x509Errors[err.Error()] = 0
-			}
 			x509Errors[err.Error()]++
 			xMu.Unlock()
 			return
