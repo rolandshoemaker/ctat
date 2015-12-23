@@ -64,6 +64,24 @@ func (d strDistribution) print(valueLabel string, sum int) {
 	w.Flush()
 }
 
+type strDistributionByCount []strBucket
+
+func (d strDistributionByCount) Len() int           { return len(d) }
+func (d strDistributionByCount) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
+func (d strDistributionByCount) Less(i, j int) bool { return d[i].count > d[j].count }
+
+func (d strDistributionByCount) print(valueLabel string, sum int) {
+	w := new(tabwriter.Writer)
+	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
+	maxWidth := 100.0
+	for _, b := range d {
+		percent := float64(b.count) / float64(sum)
+		fmt.Fprintf(w, "%d\t%.4f%%\t%s\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
+	}
+	w.Flush()
+}
+
 var metricsLookup = map[string]metricGenerator{
 	"validityDist":    &validityDistribution{periods: make(map[int]int)},
 	"certSizeDist":    &certSizeDistribution{sizes: make(map[int]int)},
@@ -266,15 +284,16 @@ func (ps *popularSuffixes) process(cert *x509.Certificate) {
 	}
 }
 
+var PopularSuffixesCutoff = 500
+
 func (ps *popularSuffixes) print() {
-	dist := strDistribution{}
+	dist := strDistributionByCount{}
 	sum := 0
 	for k, v := range ps.suffixes {
-		if v < 500 {
-			continue
+		if v > PopularSuffixesCutoff {
+			dist = append(dist, strBucket{count: v, value: k})
+			sum += v
 		}
-		dist = append(dist, strBucket{count: v, value: k})
-		sum += v
 	}
 	sort.Sort(dist)
 
