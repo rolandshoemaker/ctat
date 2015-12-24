@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/asn1"
 	"fmt"
 	"math"
 	"os"
@@ -67,6 +66,34 @@ func (d strDistribution) print(valueLabel string, sum int) {
 		fmt.Fprintf(w, "%d\t%.4f%%\t%s\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
 	}
 	w.Flush()
+}
+
+func mapToStrDist(stuff map[string]int, cutoff int) (strDistribution, int) {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range stuff {
+		if cutoff > 0 && v < cutoff {
+			continue
+		}
+		dist = append(dist, strBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+	return dist, sum
+}
+
+func mapToIntDist(stuff map[int]int, cutoff int) (intDistribution, int) {
+	dist := intDistribution{}
+	sum := 0
+	for k, v := range stuff {
+		if cutoff > 0 && v < cutoff {
+			continue
+		}
+		dist = append(dist, intBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+	return dist, sum
 }
 
 type metricGenerator interface {
@@ -147,14 +174,7 @@ func (csd *certSizeDistribution) process(cert *x509.Certificate) {
 }
 
 func (csd *certSizeDistribution) print() {
-	dist := intDistribution{}
-	sum := 0
-	for k, v := range csd.sizes {
-		dist = append(dist, intBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToIntDist(csd.sizes, 0)
 	fmt.Println("# Certificate size distribution")
 	dist.print("Size (bytes)", sum)
 }
@@ -173,14 +193,7 @@ func (vd *validityDistribution) process(cert *x509.Certificate) {
 }
 
 func (vd *validityDistribution) print() {
-	dist := intDistribution{}
-	sum := 0
-	for k, v := range vd.periods {
-		dist = append(dist, intBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToIntDist(vd.periods, 0)
 	fmt.Println("# Validity period distribution")
 	dist.print("Validity period (months)", sum)
 }
@@ -198,14 +211,7 @@ func (ssd *sanSizeDistribution) process(cert *x509.Certificate) {
 }
 
 func (ssd *sanSizeDistribution) print() {
-	dist := intDistribution{}
-	sum := 0
-	for k, v := range ssd.sizes {
-		dist = append(dist, intBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToIntDist(ssd.sizes, 0)
 	fmt.Println("# SAN num distribution")
 	dist.print("Number of SANs", sum)
 }
@@ -222,14 +228,7 @@ func (sld *serialLengthDistribution) process(cert *x509.Certificate) {
 }
 
 func (sld *serialLengthDistribution) print() {
-	dist := intDistribution{}
-	sum := 0
-	for k, v := range sld.lengths {
-		dist = append(dist, intBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToIntDist(sld.lengths, 0)
 	fmt.Println("# Serial number length distribution")
 	dist.print("Length (bytes)", sum)
 }
@@ -246,14 +245,7 @@ func (ned *numExtensionsDistribution) process(cert *x509.Certificate) {
 }
 
 func (ned *numExtensionsDistribution) print() {
-	dist := intDistribution{}
-	sum := 0
-	for k, v := range ned.extensions {
-		dist = append(dist, intBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToIntDist(ned.extensions, 0)
 	fmt.Println("# TLS extension number distribution")
 	dist.print("Num TLS extensions", sum)
 }
@@ -281,14 +273,7 @@ func (pad *pkAlgDistribution) process(cert *x509.Certificate) {
 }
 
 func (pad *pkAlgDistribution) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range pad.algs {
-		dist = append(dist, strBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(pad.algs, 0)
 	fmt.Println("# Public key type distribution")
 	dist.print("Type", sum)
 }
@@ -325,14 +310,7 @@ func (sad *sigAlgDistribution) process(cert *x509.Certificate) {
 }
 
 func (sad *sigAlgDistribution) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range sad.algs {
-		dist = append(dist, strBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(sad.algs, 0)
 	fmt.Println("# Signature type distribution")
 	dist.print("Type", sum)
 }
@@ -357,16 +335,7 @@ func (ps *popularSuffixes) process(cert *x509.Certificate) {
 var popularSuffixesCutoff = 500
 
 func (ps *popularSuffixes) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range ps.suffixes {
-		if v > popularSuffixesCutoff {
-			dist = append(dist, strBucket{count: v, value: k})
-			sum += v
-		}
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(ps.suffixes, popularSuffixesCutoff)
 	fmt.Println("# Popular DNS name suffixes")
 	dist.print("eTLD+1", sum)
 }
@@ -385,16 +354,7 @@ func (lid *leafIssuanceDist) process(cert *x509.Certificate) {
 var leafIssuanceCutoff = 500
 
 func (lid *leafIssuanceDist) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range lid.issuances {
-		if v > leafIssuanceCutoff {
-			dist = append(dist, strBucket{count: v, value: k})
-			sum += v
-		}
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(lid.issuances, leafIssuanceCutoff)
 	fmt.Println("# Leaf issuers")
 	dist.print("Num issuances", sum)
 }
@@ -433,14 +393,7 @@ func (kud *keyUsageDist) process(cert *x509.Certificate) {
 }
 
 func (kud *keyUsageDist) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range kud.usage {
-		dist = append(dist, strBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(kud.usage, 0)
 	fmt.Println("# Key usage distribution")
 	dist.print("Usages", sum)
 }
@@ -464,14 +417,7 @@ func (ktd *keyTypeDistribution) process(cert *x509.Certificate) {
 }
 
 func (ktd *keyTypeDistribution) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range ktd.keyTypes {
-		dist = append(dist, strBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(ktd.keyTypes, 0)
 	fmt.Println("# Key type distribution")
 	dist.print("Type", sum)
 }
@@ -511,27 +457,6 @@ func (nm *nameMetrics) print() {
 	)
 }
 
-func oidToString(oid asn1.ObjectIdentifier) string {
-	if len(oid) == 0 {
-		return ""
-	}
-	if len(oid) == 1 {
-		return fmt.Sprintf("%d", oid[0])
-	}
-	n := (len(oid) - 1)
-	for i := 0; i < len(oid); i++ {
-		n += len(fmt.Sprintf("%d", oid[i]))
-	}
-
-	b := make([]byte, n)
-	bp := copy(b, fmt.Sprintf("%d", oid[0]))
-	for _, s := range oid[1:] {
-		bp += copy(b[bp:], ".")
-		bp += copy(b[bp:], fmt.Sprintf("%d", s))
-	}
-	return string(b)
-}
-
 var featureLookup = map[string]string{
 	"1.3.6.1.4.1.11129.2.4.2": "Embedded SCT",
 	"1.3.6.1.5.5.7.1.24":      "OCSP must staple",
@@ -546,21 +471,14 @@ func (fm *featureMetrics) process(cert *x509.Certificate) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	for _, e := range cert.Extensions {
-		if name, present := featureLookup[oidToString(e.Id)]; present {
+		if name, present := featureLookup[e.Id.String()]; present {
 			fm.features[name]++
 		}
 	}
 }
 
 func (fm *featureMetrics) print() {
-	dist := strDistribution{}
-	sum := 0
-	for k, v := range fm.features {
-		dist = append(dist, strBucket{count: v, value: k})
-		sum += v
-	}
-	sort.Sort(dist)
-
+	dist, sum := mapToStrDist(fm.features, 0)
 	fmt.Println("# TLS feature extension usage")
 	dist.print("Extension name", sum)
 }
@@ -592,28 +510,9 @@ func (ksd *keySizeDistribution) process(cert *x509.Certificate) {
 }
 
 func (ksd *keySizeDistribution) print() {
-	dsaDist := intDistribution{}
-	dsaSum := 0
-	for k, v := range ksd.dsaSizes {
-		dsaDist = append(dsaDist, intBucket{count: v, value: k})
-		dsaSum += v
-	}
-	sort.Sort(dsaDist)
-	rsaDist := intDistribution{}
-	rsaSum := 0
-	for k, v := range ksd.rsaSizes {
-		rsaDist = append(rsaDist, intBucket{count: v, value: k})
-		rsaSum += v
-	}
-	sort.Sort(rsaDist)
-	ecDist := intDistribution{}
-	ecSum := 0
-	for k, v := range ksd.ellipticSizes {
-		ecDist = append(ecDist, intBucket{count: v, value: k})
-		ecSum += v
-	}
-	sort.Sort(ecDist)
-
+	dsaDist, dsaSum := mapToIntDist(ksd.dsaSizes, 0)
+	rsaDist, rsaSum := mapToIntDist(ksd.rsaSizes, 0)
+	ecDist, ecSum := mapToIntDist(ksd.ellipticSizes, 0)
 	fmt.Println("# DSA key size distribution")
 	dsaDist.print("Bit length", dsaSum)
 	fmt.Println("# RSA key size distribution")
