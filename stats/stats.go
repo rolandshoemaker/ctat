@@ -68,7 +68,10 @@ func (d strDistribution) print(valueLabel string, sum int) {
 	w.Flush()
 }
 
-func mapToStrDist(stuff map[string]int, cutoff int) (strDistribution, int) {
+type strMap map[string]int
+type intMap map[int]int
+
+func mapToStrDist(stuff strMap, cutoff int) (strDistribution, int) {
 	dist := strDistribution{}
 	sum := 0
 	for k, v := range stuff {
@@ -82,7 +85,7 @@ func mapToStrDist(stuff map[string]int, cutoff int) (strDistribution, int) {
 	return dist, sum
 }
 
-func mapToIntDist(stuff map[int]int, cutoff int) (intDistribution, int) {
+func mapToIntDist(stuff intMap, cutoff int) (intDistribution, int) {
 	dist := intDistribution{}
 	sum := 0
 	for k, v := range stuff {
@@ -102,21 +105,21 @@ type metricGenerator interface {
 }
 
 var metricsLookup = map[string]metricGenerator{
-	"validityDist":      &validityDistribution{periods: make(map[int]int)},
-	"certSizeDist":      &certSizeDistribution{sizes: make(map[int]int)},
-	"nameMetrics":       &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
-	"sanSizeDist":       &sanSizeDistribution{sizes: make(map[int]int)},
-	"pkTypeDist":        &pkAlgDistribution{algs: make(map[string]int)},
-	"sigTypeDist":       &sigAlgDistribution{algs: make(map[string]int)},
-	"popularSuffixes":   &popularSuffixes{suffixes: make(map[string]int)},
-	"leafIssuers":       &leafIssuanceDist{issuances: make(map[string]int)},
-	"serialLengthDist":  &serialLengthDistribution{lengths: make(map[int]int)},
-	"keyUsageDist":      &keyUsageDist{usage: make(map[string]int)},
-	"featureMetrics":    &featureMetrics{features: make(map[string]int)},
-	"numExtensionsDist": &numExtensionsDistribution{extensions: make(map[int]int)},
-	"keySizeDist":       &keySizeDistribution{rsaSizes: make(map[int]int), dsaSizes: make(map[int]int), ellipticSizes: make(map[int]int)},
-	"keyTypeDist":       &keyTypeDistribution{keyTypes: make(map[string]int)},
-	"maxPathLengthDist": &maxPathLenDistribution{lengths: make(map[int]int)},
+	"validityDist":      &validityDistribution{periods: make(intMap)},
+	"certSizeDist":      &certSizeDistribution{sizes: make(intMap)},
+	"nameMetrics":       &nameMetrics{names: make(strMap), nameSets: make(strMap)},
+	"sanSizeDist":       &sanSizeDistribution{sizes: make(intMap)},
+	"pkTypeDist":        &pkAlgDistribution{algs: make(strMap)},
+	"sigTypeDist":       &sigAlgDistribution{algs: make(strMap)},
+	"popularSuffixes":   &popularSuffixes{suffixes: make(strMap)},
+	"leafIssuers":       &leafIssuanceDist{issuances: make(strMap)},
+	"serialLengthDist":  &serialLengthDistribution{lengths: make(intMap)},
+	"keyUsageDist":      &keyUsageDist{usage: make(strMap)},
+	"featureMetrics":    &featureMetrics{features: make(strMap)},
+	"numExtensionsDist": &numExtensionsDistribution{extensions: make(intMap)},
+	"keySizeDist":       &keySizeDistribution{rsaSizes: make(intMap), dsaSizes: make(intMap), ellipticSizes: make(intMap)},
+	"keyTypeDist":       &keyTypeDistribution{keyTypes: make(strMap)},
+	"maxPathLengthDist": &maxPathLenDistribution{lengths: make(intMap)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -163,7 +166,7 @@ func StringToCutoffs(cutoffs string) error {
 }
 
 type certSizeDistribution struct {
-	sizes map[int]int
+	sizes intMap
 	mu    sync.Mutex
 }
 
@@ -181,7 +184,7 @@ func (csd *certSizeDistribution) print() {
 }
 
 type validityDistribution struct {
-	periods map[int]int
+	periods intMap
 	mu      sync.Mutex
 }
 
@@ -200,7 +203,7 @@ func (vd *validityDistribution) print() {
 }
 
 type sanSizeDistribution struct {
-	sizes map[int]int
+	sizes intMap
 	mu    sync.Mutex
 }
 
@@ -218,7 +221,7 @@ func (ssd *sanSizeDistribution) print() {
 }
 
 type serialLengthDistribution struct {
-	lengths map[int]int
+	lengths intMap
 	mu      sync.Mutex
 }
 
@@ -235,7 +238,7 @@ func (sld *serialLengthDistribution) print() {
 }
 
 type numExtensionsDistribution struct {
-	extensions map[int]int
+	extensions intMap
 	mu         sync.Mutex
 }
 
@@ -259,7 +262,7 @@ var pkAlgToString = map[x509.PublicKeyAlgorithm]string{
 }
 
 type pkAlgDistribution struct {
-	algs map[string]int
+	algs strMap
 	mu   sync.Mutex
 }
 
@@ -296,7 +299,7 @@ var sigAlgToString = map[x509.SignatureAlgorithm]string{
 }
 
 type sigAlgDistribution struct {
-	algs map[string]int
+	algs strMap
 	mu   sync.Mutex
 }
 
@@ -317,7 +320,7 @@ func (sad *sigAlgDistribution) print() {
 }
 
 type popularSuffixes struct {
-	suffixes map[string]int
+	suffixes strMap
 	mu       sync.Mutex
 }
 
@@ -342,7 +345,7 @@ func (ps *popularSuffixes) print() {
 }
 
 type leafIssuanceDist struct {
-	issuances map[string]int
+	issuances strMap
 	mu        sync.Mutex
 }
 
@@ -376,7 +379,7 @@ var keyUsageLookup = map[x509.ExtKeyUsage]string{
 }
 
 type keyUsageDist struct {
-	usage map[string]int
+	usage strMap
 	mu    sync.Mutex
 }
 
@@ -400,7 +403,7 @@ func (kud *keyUsageDist) print() {
 }
 
 type keyTypeDistribution struct {
-	keyTypes map[string]int
+	keyTypes strMap
 	mu       sync.Mutex
 }
 
@@ -425,11 +428,11 @@ func (ktd *keyTypeDistribution) print() {
 
 type nameMetrics struct {
 	nMu        sync.Mutex
-	names      map[string]int
+	names      strMap
 	totalNames int64
 
 	nsMu          sync.Mutex
-	nameSets      map[string]int
+	nameSets      strMap
 	totalNameSets int64
 }
 
@@ -464,7 +467,7 @@ var featureLookup = map[string]string{
 }
 
 type featureMetrics struct {
-	features map[string]int
+	features strMap
 	mu       sync.Mutex
 }
 
@@ -485,11 +488,11 @@ func (fm *featureMetrics) print() {
 }
 
 type keySizeDistribution struct {
-	rsaSizes      map[int]int
+	rsaSizes      intMap
 	rMu           sync.Mutex
-	dsaSizes      map[int]int
+	dsaSizes      intMap
 	dMu           sync.Mutex
-	ellipticSizes map[int]int
+	ellipticSizes intMap
 	eMu           sync.Mutex
 }
 
@@ -523,7 +526,7 @@ func (ksd *keySizeDistribution) print() {
 }
 
 type maxPathLenDistribution struct {
-	lengths map[int]int
+	lengths intMap
 	mu      sync.Mutex
 }
 
