@@ -55,3 +55,12 @@ func LeafOnlyFilter(cert *x509.Certificate) (bool, error) {
 	}
 	return false, nil
 }
+
+func IssuerCNFilter(commonName string) func(*x509.Certificate) (bool, error) {
+	return func(cert *x509.Certificate) (bool, error) {
+		if cert.Issuer.CommonName != commonName {
+			return true, nil
+		}
+		return false, nil
+	}
+}

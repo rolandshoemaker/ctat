@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/rolandshoemaker/ctat/downloader"
+	"github.com/rolandshoemaker/ctat/filter"
 	"github.com/rolandshoemaker/ctat/graph"
 	"github.com/rolandshoemaker/ctat/stats"
 
@@ -149,6 +150,9 @@ func main() {
 				cli.StringFlag{
 					Name: "cutoffs",
 				},
+				cli.StringFlag{
+					Name: "issuerFilter",
+				},
 			},
 			Action: func(c *cli.Context) {
 				if c.String("leafMetrics") == "" || c.String("cacheFile") == "" {
@@ -167,7 +171,18 @@ func main() {
 						os.Exit(1)
 					}
 				}
-				err = stats.Analyse(c.String("cacheFile"), c.String("filters"), metrics)
+				var filters []filter.Filter
+				if c.String("filters") != "" {
+					filters, err = filter.StringToFilters(c.String("filters"))
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to parse --filters: %s\n", err)
+						os.Exit(1)
+					}
+				}
+				if c.String("issuerFilter") != "" {
+					filters = append(filters, filter.IssuerCNFilter(c.String("issuerFilter")))
+				}
+				err = stats.Analyse(c.String("cacheFile"), filters, metrics)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
 					os.Exit(1)

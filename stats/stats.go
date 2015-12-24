@@ -1,7 +1,11 @@
 package stats
 
 import (
+	"crypto/dsa"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"fmt"
 	"math"
 	"os"
@@ -33,7 +37,7 @@ func (d intDistribution) Less(i, j int) bool { return d[i].value < d[j].value }
 func (d intDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
+	fmt.Fprintf(w, "Count\t\t%s\t \n", valueLabel)
 	maxWidth := 100.0
 	for _, b := range d {
 		percent := float64(b.count) / float64(sum)
@@ -56,7 +60,7 @@ func (d strDistribution) Less(i, j int) bool { return d[i].count > d[j].count }
 func (d strDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
+	fmt.Fprintf(w, "Count\t\t%s\t \n", valueLabel)
 	maxWidth := 100.0
 	for _, b := range d {
 		percent := float64(b.count) / float64(sum)
@@ -71,16 +75,20 @@ type metricGenerator interface {
 }
 
 var metricsLookup = map[string]metricGenerator{
-	"validityDist":     &validityDistribution{periods: make(map[int]int)},
-	"certSizeDist":     &certSizeDistribution{sizes: make(map[int]int)},
-	"nameMetrics":      &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
-	"sanSizeDist":      &sanSizeDistribution{sizes: make(map[int]int)},
-	"pkTypeDist":       &pkAlgDistribution{algs: make(map[string]int)},
-	"sigTypeDist":      &sigAlgDistribution{algs: make(map[string]int)},
-	"popularSuffixes":  &popularSuffixes{suffixes: make(map[string]int)},
-	"leafIssuers":      &leafIssuanceDist{issuances: make(map[string]int)},
-	"serialLengthDist": &serialLengthDistribution{lengths: make(map[int]int)},
-	"keyUsageDist":     &keyUsageDist{usage: make(map[string]int)},
+	"validityDist":      &validityDistribution{periods: make(map[int]int)},
+	"certSizeDist":      &certSizeDistribution{sizes: make(map[int]int)},
+	"nameMetrics":       &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
+	"sanSizeDist":       &sanSizeDistribution{sizes: make(map[int]int)},
+	"pkTypeDist":        &pkAlgDistribution{algs: make(map[string]int)},
+	"sigTypeDist":       &sigAlgDistribution{algs: make(map[string]int)},
+	"popularSuffixes":   &popularSuffixes{suffixes: make(map[string]int)},
+	"leafIssuers":       &leafIssuanceDist{issuances: make(map[string]int)},
+	"serialLengthDist":  &serialLengthDistribution{lengths: make(map[int]int)},
+	"keyUsageDist":      &keyUsageDist{usage: make(map[string]int)},
+	"featureMetrics":    &featureMetrics{features: make(map[string]int)},
+	"numExtensionsDist": &numExtensionsDistribution{extensions: make(map[int]int)},
+	"keySizeDist":       &keySizeDistribution{rsaSizes: make(map[int]int), dsaSizes: make(map[int]int), ellipticSizes: make(map[int]int)},
+	"keyTypeDist":       &keyTypeDistribution{keyTypes: make(map[string]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -224,6 +232,30 @@ func (sld *serialLengthDistribution) print() {
 
 	fmt.Println("# Serial number length distribution")
 	dist.print("Length (bytes)", sum)
+}
+
+type numExtensionsDistribution struct {
+	extensions map[int]int
+	mu         sync.Mutex
+}
+
+func (ned *numExtensionsDistribution) process(cert *x509.Certificate) {
+	ned.mu.Lock()
+	defer ned.mu.Unlock()
+	ned.extensions[len(cert.Extensions)]++
+}
+
+func (ned *numExtensionsDistribution) print() {
+	dist := intDistribution{}
+	sum := 0
+	for k, v := range ned.extensions {
+		dist = append(dist, intBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# TLS extension number distribution")
+	dist.print("Num TLS extensions", sum)
 }
 
 var pkAlgToString = map[x509.PublicKeyAlgorithm]string{
@@ -404,15 +436,44 @@ func (kud *keyUsageDist) print() {
 	dist := strDistribution{}
 	sum := 0
 	for k, v := range kud.usage {
-		if v > leafIssuanceCutoff {
-			dist = append(dist, strBucket{count: v, value: k})
-			sum += v
-		}
+		dist = append(dist, strBucket{count: v, value: k})
+		sum += v
 	}
 	sort.Sort(dist)
 
 	fmt.Println("# Key usage distribution")
 	dist.print("Usages", sum)
+}
+
+type keyTypeDistribution struct {
+	keyTypes map[string]int
+	mu       sync.Mutex
+}
+
+func (ktd *keyTypeDistribution) process(cert *x509.Certificate) {
+	ktd.mu.Lock()
+	defer ktd.mu.Unlock()
+	switch cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		ktd.keyTypes["RSA"]++
+	case *dsa.PublicKey:
+		ktd.keyTypes["DSA"]++
+	case *ecdsa.PublicKey:
+		ktd.keyTypes["ECDSA"]++
+	}
+}
+
+func (ktd *keyTypeDistribution) print() {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range ktd.keyTypes {
+		dist = append(dist, strBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Key type distribution")
+	dist.print("Type", sum)
 }
 
 type nameMetrics struct {
@@ -450,18 +511,121 @@ func (nm *nameMetrics) print() {
 	)
 }
 
-func Analyse(cacheFile string, filtersString string, generators []metricGenerator) error {
+func oidToString(oid asn1.ObjectIdentifier) string {
+	if len(oid) == 0 {
+		return ""
+	}
+	if len(oid) == 1 {
+		return fmt.Sprintf("%d", oid[0])
+	}
+	n := (len(oid) - 1)
+	for i := 0; i < len(oid); i++ {
+		n += len(fmt.Sprintf("%d", oid[i]))
+	}
+
+	b := make([]byte, n)
+	bp := copy(b, fmt.Sprintf("%d", oid[0]))
+	for _, s := range oid[1:] {
+		bp += copy(b[bp:], ".")
+		bp += copy(b[bp:], fmt.Sprintf("%d", s))
+	}
+	return string(b)
+}
+
+var featureLookup = map[string]string{
+	"1.3.6.1.4.1.11129.2.4.2": "Embedded SCT",
+	"1.3.6.1.5.5.7.1.24":      "OCSP must staple",
+}
+
+type featureMetrics struct {
+	features map[string]int
+	mu       sync.Mutex
+}
+
+func (fm *featureMetrics) process(cert *x509.Certificate) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	for _, e := range cert.Extensions {
+		if name, present := featureLookup[oidToString(e.Id)]; present {
+			fm.features[name]++
+		}
+	}
+}
+
+func (fm *featureMetrics) print() {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range fm.features {
+		dist = append(dist, strBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# TLS feature extension usage")
+	dist.print("Extension name", sum)
+}
+
+type keySizeDistribution struct {
+	rsaSizes      map[int]int
+	rMu           sync.Mutex
+	dsaSizes      map[int]int
+	dMu           sync.Mutex
+	ellipticSizes map[int]int
+	eMu           sync.Mutex
+}
+
+func (ksd *keySizeDistribution) process(cert *x509.Certificate) {
+	switch k := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		ksd.rMu.Lock()
+		defer ksd.rMu.Unlock()
+		ksd.rsaSizes[k.N.BitLen()]++
+	case *dsa.PublicKey:
+		ksd.dMu.Lock()
+		defer ksd.dMu.Unlock()
+		ksd.dsaSizes[k.Y.BitLen()]++
+	case *ecdsa.PublicKey:
+		ksd.eMu.Lock()
+		defer ksd.eMu.Unlock()
+		ksd.ellipticSizes[k.Params().BitSize]++
+	}
+}
+
+func (ksd *keySizeDistribution) print() {
+	dsaDist := intDistribution{}
+	dsaSum := 0
+	for k, v := range ksd.dsaSizes {
+		dsaDist = append(dsaDist, intBucket{count: v, value: k})
+		dsaSum += v
+	}
+	sort.Sort(dsaDist)
+	rsaDist := intDistribution{}
+	rsaSum := 0
+	for k, v := range ksd.rsaSizes {
+		rsaDist = append(rsaDist, intBucket{count: v, value: k})
+		rsaSum += v
+	}
+	sort.Sort(rsaDist)
+	ecDist := intDistribution{}
+	ecSum := 0
+	for k, v := range ksd.ellipticSizes {
+		ecDist = append(ecDist, intBucket{count: v, value: k})
+		ecSum += v
+	}
+	sort.Sort(ecDist)
+
+	fmt.Println("# DSA key size distribution")
+	dsaDist.print("Bit length", dsaSum)
+	fmt.Println("# RSA key size distribution")
+	rsaDist.print("Bit length", rsaSum)
+	fmt.Println("# ECDSA key size distribution")
+	ecDist.print("Bit length", ecSum)
+}
+
+func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator) error {
 	entries, err := common.LoadCacheFile(cacheFile)
 	if err != nil {
 		return err
-	}
-
-	var filters []filter.Filter
-	if filtersString != "" {
-		filters, err = filter.StringToFilters(filtersString)
-		if err != nil {
-			return err
-		}
 	}
 
 	cMu := new(sync.Mutex)
@@ -504,7 +668,3 @@ func Analyse(cacheFile string, filtersString string, generators []metricGenerato
 
 	return nil
 }
-
-// features usage metrics
-// CT extension OID     -- 1.3.6.1.4.1.11129.2.4.2
-// OCSP must staple OID -- 1.3.6.1.5.5.7.1.24
