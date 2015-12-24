@@ -116,6 +116,7 @@ var metricsLookup = map[string]metricGenerator{
 	"numExtensionsDist": &numExtensionsDistribution{extensions: make(map[int]int)},
 	"keySizeDist":       &keySizeDistribution{rsaSizes: make(map[int]int), dsaSizes: make(map[int]int), ellipticSizes: make(map[int]int)},
 	"keyTypeDist":       &keyTypeDistribution{keyTypes: make(map[string]int)},
+	"maxPathLengthDist": &maxPathLenDistribution{lengths: make(map[int]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -224,13 +225,13 @@ type serialLengthDistribution struct {
 func (sld *serialLengthDistribution) process(cert *x509.Certificate) {
 	sld.mu.Lock()
 	defer sld.mu.Unlock()
-	sld.lengths[len(cert.SerialNumber.Bytes())]++
+	sld.lengths[cert.SerialNumber.BitLen()]++
 }
 
 func (sld *serialLengthDistribution) print() {
 	dist, sum := mapToIntDist(sld.lengths, 0)
 	fmt.Println("# Serial number length distribution")
-	dist.print("Length (bytes)", sum)
+	dist.print("Serial bit length", sum)
 }
 
 type numExtensionsDistribution struct {
@@ -519,6 +520,25 @@ func (ksd *keySizeDistribution) print() {
 	rsaDist.print("Bit length", rsaSum)
 	fmt.Println("# ECDSA key size distribution")
 	ecDist.print("Bit length", ecSum)
+}
+
+type maxPathLenDistribution struct {
+	lengths map[int]int
+	mu      sync.Mutex
+}
+
+func (mpld *maxPathLenDistribution) process(cert *x509.Certificate) {
+	mpld.mu.Lock()
+	defer mpld.mu.Unlock()
+	if cert.BasicConstraintsValid && (cert.MaxPathLenZero || cert.MaxPathLen > 0) {
+		mpld.lengths[cert.MaxPathLen]++
+	}
+}
+
+func (mpld *maxPathLenDistribution) print() {
+	dist, sum := mapToIntDist(mpld.lengths, 0)
+	fmt.Println("# Max path length distribution")
+	dist.print("Path length", sum)
 }
 
 func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator) error {
