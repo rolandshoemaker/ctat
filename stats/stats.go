@@ -65,6 +65,11 @@ func (d strDistribution) print(valueLabel string, sum int) {
 	w.Flush()
 }
 
+type metricGenerator interface {
+	process(*x509.Certificate)
+	print()
+}
+
 var metricsLookup = map[string]metricGenerator{
 	"validityDist":     &validityDistribution{periods: make(map[int]int)},
 	"certSizeDist":     &certSizeDistribution{sizes: make(map[int]int)},
@@ -75,6 +80,7 @@ var metricsLookup = map[string]metricGenerator{
 	"popularSuffixes":  &popularSuffixes{suffixes: make(map[string]int)},
 	"leafIssuers":      &leafIssuanceDist{issuances: make(map[string]int)},
 	"serialLengthDist": &serialLengthDistribution{lengths: make(map[int]int)},
+	"keyUsageDist":     &keyUsageDist{usage: make(map[string]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -118,11 +124,6 @@ func StringToCutoffs(cutoffs string) error {
 		}
 	}
 	return nil
-}
-
-type metricGenerator interface {
-	process(*x509.Certificate)
-	print()
 }
 
 type certSizeDistribution struct {
@@ -364,6 +365,54 @@ func (lid *leafIssuanceDist) print() {
 
 	fmt.Println("# Leaf issuers")
 	dist.print("Num issuances", sum)
+}
+
+var keyUsageLookup = map[x509.ExtKeyUsage]string{
+	0:  "ExtKeyUsageAny",
+	1:  "ExtKeyUsageServerAuth",
+	2:  "ExtKeyUsageClientAuth",
+	3:  "ExtKeyUsageCodeSigning",
+	4:  "ExtKeyUsageEmailProtection",
+	5:  "ExtKeyUsageIPSECEndSystem",
+	6:  "ExtKeyUsageIPSECTunnel",
+	7:  "ExtKeyUsageIPSECUser",
+	8:  "ExtKeyUsageTimeStamping",
+	9:  "ExtKeyUsageOCSPSigning",
+	10: "ExtKeyUsageMicrosoftServerGatedCrypto",
+	11: "ExtKeyUsageNetscapeServerGatedCrypto",
+}
+
+type keyUsageDist struct {
+	usage map[string]int
+	mu    sync.Mutex
+}
+
+func (kud *keyUsageDist) process(cert *x509.Certificate) {
+	usages := []string{}
+	for _, u := range cert.ExtKeyUsage {
+		if name, present := keyUsageLookup[u]; present {
+			usages = append(usages, name)
+		}
+	}
+	sort.Strings(usages)
+	kud.mu.Lock()
+	defer kud.mu.Unlock()
+	kud.usage[strings.Join(usages, ", ")]++
+}
+
+func (kud *keyUsageDist) print() {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range kud.usage {
+		if v > leafIssuanceCutoff {
+			dist = append(dist, strBucket{count: v, value: k})
+			sum += v
+		}
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Key usage distribution")
+	dist.print("Usages", sum)
 }
 
 type nameMetrics struct {
