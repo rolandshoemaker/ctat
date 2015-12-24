@@ -50,27 +50,9 @@ type strDistribution []strBucket
 
 func (d strDistribution) Len() int           { return len(d) }
 func (d strDistribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
-func (d strDistribution) Less(i, j int) bool { return d[i].value < d[j].value }
+func (d strDistribution) Less(i, j int) bool { return d[i].count > d[j].count }
 
 func (d strDistribution) print(valueLabel string, sum int) {
-	w := new(tabwriter.Writer)
-	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
-	maxWidth := 100.0
-	for _, b := range d {
-		percent := float64(b.count) / float64(sum)
-		fmt.Fprintf(w, "%d\t%.4f%%\t%s\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
-	}
-	w.Flush()
-}
-
-type strDistributionByCount []strBucket
-
-func (d strDistributionByCount) Len() int           { return len(d) }
-func (d strDistributionByCount) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
-func (d strDistributionByCount) Less(i, j int) bool { return d[i].count > d[j].count }
-
-func (d strDistributionByCount) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintf(w, "Count\t\t%s\n", valueLabel)
@@ -90,6 +72,7 @@ var metricsLookup = map[string]metricGenerator{
 	"pkTypeDist":      &pkAlgDistribution{algs: make(map[string]int)},
 	"sigTypeDist":     &sigAlgDistribution{algs: make(map[string]int)},
 	"popularSuffixes": &popularSuffixes{suffixes: make(map[string]int)},
+	"leafIssuers":     &leafIssuanceDist{issuances: make(map[string]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -287,7 +270,7 @@ func (ps *popularSuffixes) process(cert *x509.Certificate) {
 var PopularSuffixesCutoff = 500
 
 func (ps *popularSuffixes) print() {
-	dist := strDistributionByCount{}
+	dist := strDistribution{}
 	sum := 0
 	for k, v := range ps.suffixes {
 		if v > PopularSuffixesCutoff {
@@ -299,6 +282,34 @@ func (ps *popularSuffixes) print() {
 
 	fmt.Println("# Popular DNS name suffixes")
 	dist.print("eTLD+1", sum)
+}
+
+type leafIssuanceDist struct {
+	issuances map[string]int
+	mu        sync.Mutex
+}
+
+func (lid *leafIssuanceDist) process(cert *x509.Certificate) {
+	lid.mu.Lock()
+	defer lid.mu.Unlock()
+	lid.issuances[common.SubjectToString(cert.Issuer)]++
+}
+
+var LeafIssuanceCutoff = 500
+
+func (lid *leafIssuanceDist) print() {
+	dist := strDistribution{}
+	sum := 0
+	for k, v := range lid.issuances {
+		if v > PopularSuffixesCutoff {
+			dist = append(dist, strBucket{count: v, value: k})
+			sum += v
+		}
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Leaf issuers")
+	dist.print("Num issuances", sum)
 }
 
 type nameMetrics struct {
