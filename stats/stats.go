@@ -361,18 +361,18 @@ func (lid *leafIssuanceDist) print() {
 }
 
 var keyUsageLookup = map[x509.ExtKeyUsage]string{
-	0:  "ExtKeyUsageAny",
-	1:  "ExtKeyUsageServerAuth",
-	2:  "ExtKeyUsageClientAuth",
-	3:  "ExtKeyUsageCodeSigning",
-	4:  "ExtKeyUsageEmailProtection",
-	5:  "ExtKeyUsageIPSECEndSystem",
-	6:  "ExtKeyUsageIPSECTunnel",
-	7:  "ExtKeyUsageIPSECUser",
-	8:  "ExtKeyUsageTimeStamping",
-	9:  "ExtKeyUsageOCSPSigning",
-	10: "ExtKeyUsageMicrosoftServerGatedCrypto",
-	11: "ExtKeyUsageNetscapeServerGatedCrypto",
+	0:  "Any",
+	1:  "Server Auth",
+	2:  "Client Auth",
+	3:  "Code Signing",
+	4:  "Email Protection",
+	5:  "IPSEC End System",
+	6:  "IPSEC Tunnel",
+	7:  "IPSEC User",
+	8:  "Time Stamping",
+	9:  "OCSP Signing",
+	10: "Microsoft Server Gated Crypto",
+	11: "Netscape Server Gated Crypto",
 }
 
 type keyUsageDist struct {
@@ -396,7 +396,7 @@ func (kud *keyUsageDist) process(cert *x509.Certificate) {
 func (kud *keyUsageDist) print() {
 	dist, sum := mapToStrDist(kud.usage, 0)
 	fmt.Println("# Key usage distribution")
-	dist.print("Usages", sum)
+	dist.print("Usage sets", sum)
 }
 
 type keyTypeDistribution struct {
