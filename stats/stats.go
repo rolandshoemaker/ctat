@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,14 +66,15 @@ func (d strDistribution) print(valueLabel string, sum int) {
 }
 
 var metricsLookup = map[string]metricGenerator{
-	"validityDist":    &validityDistribution{periods: make(map[int]int)},
-	"certSizeDist":    &certSizeDistribution{sizes: make(map[int]int)},
-	"nameMetrics":     &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
-	"sanSizeDist":     &sanSizeDistribution{sizes: make(map[int]int)},
-	"pkTypeDist":      &pkAlgDistribution{algs: make(map[string]int)},
-	"sigTypeDist":     &sigAlgDistribution{algs: make(map[string]int)},
-	"popularSuffixes": &popularSuffixes{suffixes: make(map[string]int)},
-	"leafIssuers":     &leafIssuanceDist{issuances: make(map[string]int)},
+	"validityDist":     &validityDistribution{periods: make(map[int]int)},
+	"certSizeDist":     &certSizeDistribution{sizes: make(map[int]int)},
+	"nameMetrics":      &nameMetrics{names: make(map[string]int), nameSets: make(map[string]int)},
+	"sanSizeDist":      &sanSizeDistribution{sizes: make(map[int]int)},
+	"pkTypeDist":       &pkAlgDistribution{algs: make(map[string]int)},
+	"sigTypeDist":      &sigAlgDistribution{algs: make(map[string]int)},
+	"popularSuffixes":  &popularSuffixes{suffixes: make(map[string]int)},
+	"leafIssuers":      &leafIssuanceDist{issuances: make(map[string]int)},
+	"serialLengthDist": &serialLengthDistribution{lengths: make(map[int]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -88,6 +90,34 @@ func StringToMetrics(metricsString string) ([]metricGenerator, error) {
 		return nil, fmt.Errorf("at least one metric is required to continue")
 	}
 	return metrics, nil
+}
+
+var cutoffLookup = map[string]*int{
+	"popularSuffixes": &popularSuffixesCutoff,
+	"leafIssuers":     &leafIssuanceCutoff,
+}
+
+func StringToCutoffs(cutoffs string) error {
+	sections := strings.Split(cutoffs, ",")
+	if len(sections) == 0 {
+		return fmt.Errorf("At least one properly formatted cutoff must be specified")
+	}
+	for i, f := range sections {
+		fields := strings.Split(f, ":")
+		if len(fields) != 2 {
+			return fmt.Errorf("Cutoff definition [%d] had invalid format", i+1)
+		}
+		if cutoff, present := cutoffLookup[fields[0]]; !present {
+			return fmt.Errorf("Cutoff '%s' does not exist", fields[0])
+		} else if present {
+			value, err := strconv.Atoi(fields[1])
+			if err != nil {
+				return fmt.Errorf("Cutoff count for '%s' is not an int: %s", fields[0], err)
+			}
+			*cutoff = value
+		}
+	}
+	return nil
 }
 
 type metricGenerator interface {
@@ -169,6 +199,30 @@ func (ssd *sanSizeDistribution) print() {
 
 	fmt.Println("# SAN num distribution")
 	dist.print("Number of SANs", sum)
+}
+
+type serialLengthDistribution struct {
+	lengths map[int]int
+	mu      sync.Mutex
+}
+
+func (sld *serialLengthDistribution) process(cert *x509.Certificate) {
+	sld.mu.Lock()
+	defer sld.mu.Unlock()
+	sld.lengths[len(cert.SerialNumber.Bytes())]++
+}
+
+func (sld *serialLengthDistribution) print() {
+	dist := intDistribution{}
+	sum := 0
+	for k, v := range sld.lengths {
+		dist = append(dist, intBucket{count: v, value: k})
+		sum += v
+	}
+	sort.Sort(dist)
+
+	fmt.Println("# Serial number length distribution")
+	dist.print("Length (bytes)", sum)
 }
 
 var pkAlgToString = map[x509.PublicKeyAlgorithm]string{
@@ -267,13 +321,13 @@ func (ps *popularSuffixes) process(cert *x509.Certificate) {
 	}
 }
 
-var PopularSuffixesCutoff = 500
+var popularSuffixesCutoff = 500
 
 func (ps *popularSuffixes) print() {
 	dist := strDistribution{}
 	sum := 0
 	for k, v := range ps.suffixes {
-		if v > PopularSuffixesCutoff {
+		if v > popularSuffixesCutoff {
 			dist = append(dist, strBucket{count: v, value: k})
 			sum += v
 		}
@@ -295,13 +349,13 @@ func (lid *leafIssuanceDist) process(cert *x509.Certificate) {
 	lid.issuances[common.SubjectToString(cert.Issuer)]++
 }
 
-var LeafIssuanceCutoff = 500
+var leafIssuanceCutoff = 500
 
 func (lid *leafIssuanceDist) print() {
 	dist := strDistribution{}
 	sum := 0
 	for k, v := range lid.issuances {
-		if v > PopularSuffixesCutoff {
+		if v > leafIssuanceCutoff {
 			dist = append(dist, strBucket{count: v, value: k})
 			sum += v
 		}

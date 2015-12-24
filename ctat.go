@@ -146,6 +146,9 @@ func main() {
 				cli.StringFlag{
 					Name: "leafMetrics",
 				},
+				cli.StringFlag{
+					Name: "cutoffs",
+				},
 			},
 			Action: func(c *cli.Context) {
 				if c.String("leafMetrics") == "" || c.String("cacheFile") == "" {
@@ -156,6 +159,13 @@ func main() {
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to parse --leafMetrics: %s\n", err)
 					os.Exit(1)
+				}
+				if c.String("cutoffs") != "" {
+					err = stats.StringToCutoffs(c.String("cutoffs"))
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to parse --cutoffs: %s\n", err)
+						os.Exit(1)
+					}
 				}
 				err = stats.Analyse(c.String("cacheFile"), c.String("filters"), metrics)
 				if err != nil {
