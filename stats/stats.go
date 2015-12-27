@@ -37,6 +37,7 @@ func (d intDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintf(w, "Count\t\t%s\t \n", valueLabel)
+	fmt.Fprintf(w, "-----\t\t%s\t \n", strings.Repeat("-", len(valueLabel)))
 	maxWidth := 100.0
 	for _, b := range d {
 		percent := float64(b.count) / float64(sum)
@@ -60,6 +61,7 @@ func (d strDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintf(w, "Count\t\t%s\t \n", valueLabel)
+	fmt.Fprintf(w, "-----\t\t%s\t \n", strings.Repeat("-", len(valueLabel)))
 	maxWidth := 100.0
 	for _, b := range d {
 		percent := float64(b.count) / float64(sum)
@@ -360,7 +362,7 @@ var leafIssuanceCutoff = 500
 func (lid *leafIssuanceDist) print() {
 	dist, sum := mapToStrDist(lid.issuances, leafIssuanceCutoff)
 	fmt.Println("# Leaf issuers")
-	dist.print("Num issuances", sum)
+	dist.print("Issuer distinguished name", sum)
 }
 
 var keyUsageLookup = map[x509.ExtKeyUsage]string{
