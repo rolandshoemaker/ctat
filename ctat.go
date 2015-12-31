@@ -153,6 +153,9 @@ func main() {
 				cli.StringFlag{
 					Name: "issuerFilter",
 				},
+				cli.BoolFlag{
+					Name: "measureErrors",
+				},
 			},
 			Action: func(c *cli.Context) {
 				if c.String("leafMetrics") == "" || c.String("cacheFile") == "" {
@@ -182,7 +185,7 @@ func main() {
 				if c.String("issuerFilter") != "" {
 					filters = append(filters, filter.IssuerCNFilter(c.String("issuerFilter")))
 				}
-				err = stats.Analyse(c.String("cacheFile"), filters, metrics)
+				err = stats.Analyse(c.String("cacheFile"), filters, metrics, c.Bool("measureErrors"))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
 					os.Exit(1)
@@ -192,6 +195,9 @@ func main() {
 		{
 			Name:  "scanner",
 			Usage: "Host extracter + TLS scanner (generates adoption/failure stats for HTTPS deployment)",
+			Action: func(c *cli.Context) {
+				fmt.Println("just use scanner/scanner.go for now ._.")
+			},
 		},
 	}
 

@@ -4,6 +4,7 @@ import (
 	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
 	"math"
@@ -122,6 +123,7 @@ var metricsLookup = map[string]metricGenerator{
 	"keySizeDist":       &keySizeDistribution{rsaSizes: make(intMap), dsaSizes: make(intMap), ellipticSizes: make(intMap)},
 	"keyTypeDist":       &keyTypeDistribution{keyTypes: make(strMap)},
 	"maxPathLengthDist": &maxPathLenDistribution{lengths: make(intMap)},
+	"keyReuseMetrics":   &keyReuseMetrics{hashes: make(map[[32]byte]int)},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -142,6 +144,7 @@ func StringToMetrics(metricsString string) ([]metricGenerator, error) {
 var cutoffLookup = map[string]*int{
 	"popularSuffixes": &popularSuffixesCutoff,
 	"leafIssuers":     &leafIssuanceCutoff,
+	"reusedKeys":      &keyReuseCutoff,
 }
 
 func StringToCutoffs(cutoffs string) error {
@@ -546,7 +549,40 @@ func (mpld *maxPathLenDistribution) print() {
 	dist.print("Path length", sum)
 }
 
-func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator) error {
+var keyReuseCutoff = 10
+
+type keyReuseMetrics struct {
+	hashes map[[32]byte]int
+	mu     sync.Mutex
+}
+
+func (krm *keyReuseMetrics) process(cert *x509.Certificate) {
+	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	krm.mu.Lock()
+	defer krm.mu.Unlock()
+	krm.hashes[hash]++
+}
+
+func (krm *keyReuseMetrics) print() {
+	reuseDistMap := make(map[int]int)
+	hashMap := make(map[string]int)
+	for k, v := range krm.hashes {
+		reuseDistMap[v]++
+		if v > keyReuseCutoff {
+			hashMap[fmt.Sprintf("%X", k)] = v
+		}
+	}
+
+	reuseDist, reuseSum := mapToIntDist(reuseDistMap, 1)
+	fmt.Println("# Reused key frequency distribution")
+	reuseDist.print("Frequency", reuseSum)
+
+	hashDist, hashSum := mapToStrDist(hashMap, keyReuseCutoff)
+	fmt.Printf("# Keys reused more than %d times\n", keyReuseCutoff)
+	hashDist.print("Public key hash", hashSum)
+}
+
+func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator, measureErrors bool) error {
 	entries, err := common.LoadCacheFile(cacheFile)
 	if err != nil {
 		return err
@@ -558,17 +594,21 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 	x509Errors := make(map[string]int)
 	entries.Map(func(ent *ct.EntryAndPosition, err error) {
 		if err != nil {
-			cMu.Lock()
-			ctErrors[err.Error()]++
-			cMu.Unlock()
+			if measureErrors {
+				cMu.Lock()
+				ctErrors[err.Error()]++
+				cMu.Unlock()
+			}
 			return
 		}
-		// execute CT entry metric stuff (TODO)
+		// execute CT entry metric stuff (TODO!)
 		cert, skip, err := common.ParseAndFilter(ent.Entry.X509Cert, filters)
 		if !skip && err != nil {
-			xMu.Lock()
-			x509Errors[err.Error()]++
-			xMu.Unlock()
+			if measureErrors {
+				xMu.Lock()
+				x509Errors[err.Error()]++
+				xMu.Unlock()
+			}
 			return
 		} else if err == nil && skip {
 			return
@@ -588,6 +628,15 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 	for _, g := range generators {
 		g.print()
 		fmt.Println("")
+	}
+
+	if measureErrors {
+		ctErrorDist, ctSum := mapToStrDist(ctErrors, 0)
+		x509ErrorsDist, x509Sum := mapToStrDist(x509Errors, 0)
+		fmt.Println("# CT parsing errors distribution")
+		ctErrorDist.print("Error", ctSum)
+		fmt.Println("# x509 parsing errors distribution")
+		x509ErrorsDist.print("Error", x509Sum)
 	}
 
 	return nil
