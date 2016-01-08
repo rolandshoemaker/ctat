@@ -9,7 +9,7 @@ import (
 
 	"github.com/rolandshoemaker/ctat/filter"
 
-	ct "github.com/jsha/certificatetransparency"
+	ct "github.com/rolandshoemaker/certificatetransparency"
 )
 
 func escape(str string) string {
@@ -60,5 +60,5 @@ func LoadCacheFile(filename string) (*ct.EntriesFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open CT cache file: %s", err)
 	}
-	return &ct.EntriesFile{ctFile}, nil
+	return &ct.EntriesFile{File: ctFile}, nil
 }

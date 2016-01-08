@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	ct "github.com/jsha/certificatetransparency"
+	ct "github.com/rolandshoemaker/certificatetransparency"
 )
 
 func Download(logURL, logKey, cacheFilename string) error {
@@ -23,7 +23,7 @@ func Download(logURL, logKey, cacheFilename string) error {
 	}
 	defer file.Close()
 
-	entriesFile := ct.EntriesFile{file}
+	entriesFile := ct.EntriesFile{File: file}
 
 	sth, err := ctLog.GetSignedTreeHead()
 	if err != nil {

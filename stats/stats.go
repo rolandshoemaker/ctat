@@ -21,8 +21,8 @@ import (
 	"github.com/rolandshoemaker/ctat/common"
 	"github.com/rolandshoemaker/ctat/filter"
 
-	ct "github.com/jsha/certificatetransparency"
 	"github.com/miekg/dns"
+	ct "github.com/rolandshoemaker/certificatetransparency"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -669,17 +669,29 @@ func (tdt *torDNSTest) process(cert *x509.Certificate) {
 	for _, n := range cert.DNSNames {
 		atomic.AddInt64(&tdt.totalChecked, 1)
 		msg := new(dns.Msg)
+		msg.SetEdns0(4096, true)
 		msg.SetQuestion(dns.Fqdn(n), dns.TypeA)
-		r, _, err := tdt.client.Exchange(msg, tdt.normalResolver)
-		normalFailed := err != nil || r.Rcode == dns.RcodeServerFailure
-		if normalFailed {
-			atomic.AddInt64(&tdt.normalFailures, 1)
-		}
-		r, _, err = tdt.client.Exchange(msg, tdt.torResolver)
-		torFailed := err != nil || r.Rcode == dns.RcodeServerFailure
-		if !normalFailed && torFailed {
+		var normalFailure, torFailure bool
+		wg := new(sync.WaitGroup)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, _, err := tdt.client.Exchange(msg, tdt.normalResolver)
+			normalFailure = err != nil || r.Rcode == dns.RcodeServerFailure
+			if normalFailure {
+				atomic.AddInt64(&tdt.normalFailures, 1)
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, _, err := tdt.client.Exchange(msg, tdt.torResolver)
+			torFailure = err != nil || r.Rcode == dns.RcodeServerFailure
+		}()
+		wg.Wait()
+		if !normalFailure && torFailure {
 			atomic.AddInt64(&tdt.torFailures, 1)
-		} else if normalFailed && torFailed {
+		} else if normalFailure && torFailure {
 			atomic.AddInt64(&tdt.bothFailures, 1)
 		}
 	}
@@ -696,11 +708,12 @@ func (tdt *torDNSTest) print() {
 	)
 }
 
-func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator, measureErrors bool) error {
+func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator, measureErrors bool, mapWorkers int) error {
 	entries, err := common.LoadCacheFile(cacheFile)
 	if err != nil {
 		return err
 	}
+	entries.MapWorkers = mapWorkers
 
 	cMu := new(sync.Mutex)
 	ctErrors := make(map[string]int)

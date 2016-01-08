@@ -156,6 +156,9 @@ func main() {
 				cli.BoolFlag{
 					Name: "measureErrors",
 				},
+				cli.IntFlag{
+					Name: "mapWorkers",
+				},
 			},
 			Action: func(c *cli.Context) {
 				if c.String("leafMetrics") == "" || c.String("cacheFile") == "" {
@@ -185,7 +188,7 @@ func main() {
 				if c.String("issuerFilter") != "" {
 					filters = append(filters, filter.IssuerCNFilter(c.String("issuerFilter")))
 				}
-				err = stats.Analyse(c.String("cacheFile"), filters, metrics, c.Bool("measureErrors"))
+				err = stats.Analyse(c.String("cacheFile"), filters, metrics, c.Bool("measureErrors"), c.Int("mapWorkers"))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to parse cache file: %s\n", err)
 					os.Exit(1)

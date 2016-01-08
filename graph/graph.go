@@ -18,7 +18,7 @@ import (
 	"github.com/rolandshoemaker/ctat/common"
 	"github.com/rolandshoemaker/ctat/filter"
 
-	ct "github.com/jsha/certificatetransparency"
+	ct "github.com/rolandshoemaker/certificatetransparency"
 )
 
 type rootSet []*node

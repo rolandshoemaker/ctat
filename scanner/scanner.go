@@ -18,7 +18,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	ct "github.com/jsha/certificatetransparency"
+	ct "github.com/rolandshoemaker/certificatetransparency"
 	"golang.org/x/crypto/ocsp"
 )
 
