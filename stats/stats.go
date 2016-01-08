@@ -4,8 +4,9 @@ import (
 	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/rsa"
-	"crypto/sha256"
+	"crypto/sha1"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -15,58 +16,60 @@ import (
 	"sync"
 	"sync/atomic"
 	"text/tabwriter"
+	"time"
 
 	"github.com/rolandshoemaker/ctat/common"
 	"github.com/rolandshoemaker/ctat/filter"
 
 	ct "github.com/jsha/certificatetransparency"
+	"github.com/miekg/dns"
 	"golang.org/x/net/publicsuffix"
 )
 
 type intBucket struct {
-	value int
-	count int
+	Value     int
+	Frequency int
 }
 
 type intDistribution []intBucket
 
 func (d intDistribution) Len() int           { return len(d) }
 func (d intDistribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
-func (d intDistribution) Less(i, j int) bool { return d[i].value < d[j].value }
+func (d intDistribution) Less(i, j int) bool { return d[i].Value < d[j].Value }
 
 func (d intDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintf(w, "Count\t\t%s\t \n", valueLabel)
+	fmt.Fprintf(w, "Frequency\t\t%s\t \n", valueLabel)
 	fmt.Fprintf(w, "-----\t\t%s\t \n", strings.Repeat("-", len(valueLabel)))
 	maxWidth := 100.0
 	for _, b := range d {
-		percent := float64(b.count) / float64(sum)
-		fmt.Fprintf(w, "%d\t%.4f%%\t%d\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
+		percent := float64(b.Frequency) / float64(sum)
+		fmt.Fprintf(w, "%d\t%.4f%%\t%d\t%s\n", b.Frequency, percent*100.0, b.Value, strings.Repeat("*", int(maxWidth*percent)))
 	}
 	w.Flush()
 }
 
 type strBucket struct {
-	value string
-	count int
+	Value     string
+	Frequency int
 }
 
 type strDistribution []strBucket
 
 func (d strDistribution) Len() int           { return len(d) }
 func (d strDistribution) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
-func (d strDistribution) Less(i, j int) bool { return d[i].count > d[j].count }
+func (d strDistribution) Less(i, j int) bool { return d[i].Frequency > d[j].Frequency }
 
 func (d strDistribution) print(valueLabel string, sum int) {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintf(w, "Count\t\t%s\t \n", valueLabel)
+	fmt.Fprintf(w, "Frequency\t\t%s\t \n", valueLabel)
 	fmt.Fprintf(w, "-----\t\t%s\t \n", strings.Repeat("-", len(valueLabel)))
 	maxWidth := 100.0
 	for _, b := range d {
-		percent := float64(b.count) / float64(sum)
-		fmt.Fprintf(w, "%d\t%.4f%%\t%s\t%s\n", b.count, percent*100.0, b.value, strings.Repeat("*", int(maxWidth*percent)))
+		percent := float64(b.Frequency) / float64(sum)
+		fmt.Fprintf(w, "%d\t%.4f%%\t%s\t%s\n", b.Frequency, percent*100.0, b.Value, strings.Repeat("*", int(maxWidth*percent)))
 	}
 	w.Flush()
 }
@@ -81,7 +84,7 @@ func mapToStrDist(stuff strMap, cutoff int) (strDistribution, int) {
 		if cutoff > 0 && v < cutoff {
 			continue
 		}
-		dist = append(dist, strBucket{count: v, value: k})
+		dist = append(dist, strBucket{Frequency: v, Value: k})
 		sum += v
 	}
 	sort.Sort(dist)
@@ -95,17 +98,50 @@ func mapToIntDist(stuff intMap, cutoff int) (intDistribution, int) {
 		if cutoff > 0 && v < cutoff {
 			continue
 		}
-		dist = append(dist, intBucket{count: v, value: k})
+		dist = append(dist, intBucket{Frequency: v, Value: k})
 		sum += v
 	}
 	sort.Sort(dist)
 	return dist, sum
 }
 
+type distHolder struct {
+	Dist  interface{}
+	Label string
+}
+
+type statHolder struct {
+	Value int
+	Label string
+}
+
+type datumType string
+
+var (
+	singleStat = datumType("single-stat")
+	multiStat  = datumType("multi-stat")
+	singleDist = datumType("single-dist")
+	multiDist  = datumType("multi-dist")
+)
+
+type jsonDatum struct {
+	Name string
+	Type datumType
+	Data interface{}
+}
+
+type jsonHolder struct {
+	Timestamp time.Time
+	Stats     []jsonDatum
+}
+
 type metricGenerator interface {
 	process(*x509.Certificate)
 	print()
+	// json() jsonDatum
 }
+
+var dnsTimeout = time.Second * 5
 
 var metricsLookup = map[string]metricGenerator{
 	"validityDist":      &validityDistribution{periods: make(intMap)},
@@ -123,7 +159,13 @@ var metricsLookup = map[string]metricGenerator{
 	"keySizeDist":       &keySizeDistribution{rsaSizes: make(intMap), dsaSizes: make(intMap), ellipticSizes: make(intMap)},
 	"keyTypeDist":       &keyTypeDistribution{keyTypes: make(strMap)},
 	"maxPathLengthDist": &maxPathLenDistribution{lengths: make(intMap)},
-	"keyReuseMetrics":   &keyReuseMetrics{hashes: make(map[[32]byte]int)},
+	"keyReuseMetrics":   &keyReuseMetrics{hashes: make(map[[20]byte]int)},
+	"badASNMetrics":     &badASNMetrics{negativeSerialIssuers: make(map[string]int)},
+	"torDNSTest": &torDNSTest{
+		client:         &dns.Client{DialTimeout: dnsTimeout, ReadTimeout: dnsTimeout, Net: "tcp"},
+		normalResolver: "127.0.0.1:53",
+		torResolver:    "127.0.0.1:9053",
+	},
 }
 
 func StringToMetrics(metricsString string) ([]metricGenerator, error) {
@@ -173,6 +215,7 @@ func StringToCutoffs(cutoffs string) error {
 type certSizeDistribution struct {
 	sizes intMap
 	mu    sync.Mutex
+	dist  intDistribution
 }
 
 func (csd *certSizeDistribution) process(cert *x509.Certificate) {
@@ -186,6 +229,13 @@ func (csd *certSizeDistribution) print() {
 	dist, sum := mapToIntDist(csd.sizes, 0)
 	fmt.Println("# Certificate size distribution")
 	dist.print("Size (bytes)", sum)
+	jd := jsonDatum{Data: distHolder{Dist: dist, Label: "Size (bytes)"}}
+	d, e := json.Marshal(jd)
+	fmt.Println(string(d), e)
+}
+
+func (csd *certSizeDistribution) json() jsonDatum {
+	return jsonDatum{Name: "", Data: csd.dist}
 }
 
 type validityDistribution struct {
@@ -549,15 +599,15 @@ func (mpld *maxPathLenDistribution) print() {
 	dist.print("Path length", sum)
 }
 
-var keyReuseCutoff = 10
+var keyReuseCutoff = 100
 
 type keyReuseMetrics struct {
-	hashes map[[32]byte]int
+	hashes map[[20]byte]int
 	mu     sync.Mutex
 }
 
 func (krm *keyReuseMetrics) process(cert *x509.Certificate) {
-	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	hash := sha1.Sum(cert.RawSubjectPublicKeyInfo)
 	krm.mu.Lock()
 	defer krm.mu.Unlock()
 	krm.hashes[hash]++
@@ -579,7 +629,71 @@ func (krm *keyReuseMetrics) print() {
 
 	hashDist, hashSum := mapToStrDist(hashMap, keyReuseCutoff)
 	fmt.Printf("# Keys reused more than %d times\n", keyReuseCutoff)
-	hashDist.print("Public key hash", hashSum)
+	hashDist.print("Public key SHA1 hash", hashSum)
+}
+
+type badASNMetrics struct {
+	negativeSerialIssuers map[string]int
+	mu                    sync.Mutex
+}
+
+func (bam *badASNMetrics) process(cert *x509.Certificate) {
+	if cert.SerialNumber.Sign() >= 0 {
+		return
+	}
+	issuer := common.SubjectToString(cert.Issuer)
+	bam.mu.Lock()
+	defer bam.mu.Unlock()
+	bam.negativeSerialIssuers[issuer]++
+}
+
+func (bam *badASNMetrics) print() {
+	dist, sum := mapToStrDist(bam.negativeSerialIssuers, 0)
+	fmt.Println("# Issuers creating certificates with negative serial numbers")
+	dist.print("Issuer DN", sum)
+}
+
+type torDNSTest struct {
+	torFailures    int64
+	normalFailures int64
+	bothFailures   int64
+	totalChecked   int64
+
+	torResolver    string
+	normalResolver string
+	client         *dns.Client
+	torClient      *dns.Client
+}
+
+func (tdt *torDNSTest) process(cert *x509.Certificate) {
+	for _, n := range cert.DNSNames {
+		atomic.AddInt64(&tdt.totalChecked, 1)
+		msg := new(dns.Msg)
+		msg.SetQuestion(dns.Fqdn(n), dns.TypeA)
+		r, _, err := tdt.client.Exchange(msg, tdt.normalResolver)
+		normalFailed := err != nil || r.Rcode == dns.RcodeServerFailure
+		if normalFailed {
+			atomic.AddInt64(&tdt.normalFailures, 1)
+		}
+		r, _, err = tdt.client.Exchange(msg, tdt.torResolver)
+		torFailed := err != nil || r.Rcode == dns.RcodeServerFailure
+		if !normalFailed && torFailed {
+			atomic.AddInt64(&tdt.torFailures, 1)
+		} else if normalFailed && torFailed {
+			atomic.AddInt64(&tdt.bothFailures, 1)
+		}
+	}
+}
+
+func (tdt *torDNSTest) print() {
+	fmt.Println("# Tor DNS lookup test")
+	fmt.Printf(
+		"%d names checked, %.2f failed both tests, %.2f failed over Tor, %.2f failed with normal resolver",
+		tdt.totalChecked,
+		(float64(tdt.bothFailures)/float64(tdt.totalChecked))*100.0,
+		(float64(tdt.torFailures)/float64(tdt.totalChecked))*100.0,
+		(float64(tdt.normalFailures)/float64(tdt.totalChecked))*100.0,
+	)
 }
 
 func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator, measureErrors bool) error {
@@ -610,7 +724,7 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 				xMu.Unlock()
 			}
 			return
-		} else if err == nil && skip {
+		} else if skip {
 			return
 		}
 		// execute leaf metric generators
@@ -633,7 +747,7 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 	if measureErrors {
 		ctErrorDist, ctSum := mapToStrDist(ctErrors, 0)
 		x509ErrorsDist, x509Sum := mapToStrDist(x509Errors, 0)
-		fmt.Println("# CT parsing errors distribution")
+		fmt.Printf("\n# CT parsing errors distribution\n")
 		ctErrorDist.print("Error", ctSum)
 		fmt.Println("# x509 parsing errors distribution")
 		x509ErrorsDist.print("Error", x509Sum)

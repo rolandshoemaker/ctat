@@ -9,7 +9,7 @@ import (
 	"github.com/rolandshoemaker/ctat/graph"
 	"github.com/rolandshoemaker/ctat/stats"
 
-	"github.com/codegansta/cli"
+	"github.com/codegangsta/cli"
 )
 
 func main() {
