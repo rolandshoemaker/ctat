@@ -806,9 +806,9 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 	if measureErrors {
 		ctErrorDist, ctSum := mapToStrDist(ctErrors, 0)
 		x509ErrorsDist, x509Sum := mapToStrDist(x509Errors, 0)
-		fmt.Printf("\n# CT parsing errors distribution\n")
+		fmt.Printf("\n# CT parsing errors\n")
 		ctErrorDist.print("Error", ctSum)
-		fmt.Println("# x509 parsing errors distribution")
+		fmt.Println("# x509 parsing errors")
 		x509ErrorsDist.print("Error", x509Sum)
 	}
 
