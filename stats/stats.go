@@ -164,7 +164,7 @@ var metricsLookup = map[string]metricGenerator{
 	"torDNSTest": &torDNSTest{
 		client:         &dns.Client{DialTimeout: dnsTimeout, ReadTimeout: dnsTimeout, Net: "tcp"},
 		normalResolver: "127.0.0.1:53",
-		torResolver:    "127.0.0.1:9053",
+		torResolver:    "172.17.0.72:9053",
 	},
 }
 
@@ -662,7 +662,6 @@ type torDNSTest struct {
 	torResolver    string
 	normalResolver string
 	client         *dns.Client
-	torClient      *dns.Client
 }
 
 func (tdt *torDNSTest) process(cert *x509.Certificate) {
@@ -700,7 +699,7 @@ func (tdt *torDNSTest) process(cert *x509.Certificate) {
 func (tdt *torDNSTest) print() {
 	fmt.Println("# Tor DNS lookup test")
 	fmt.Printf(
-		"%d names checked, %.2f failed both tests, %.2f failed over Tor, %.2f failed with normal resolver",
+		"%d names checked, %.2f%% failed both tests, %.2f%% failed over Tor, %.2f%% failed with normal resolver",
 		tdt.totalChecked,
 		(float64(tdt.bothFailures)/float64(tdt.totalChecked))*100.0,
 		(float64(tdt.torFailures)/float64(tdt.totalChecked))*100.0,
