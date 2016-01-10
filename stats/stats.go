@@ -707,24 +707,65 @@ func (tdt *torDNSTest) print() {
 	)
 }
 
-func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator, measureErrors bool, mapWorkers int) error {
+func Analyse(cacheFile string, filters []filter.Filter, generators []metricGenerator, measureErrors bool, mapWorkers int, progress bool) error {
 	entries, err := common.LoadCacheFile(cacheFile)
 	if err != nil {
 		return err
 	}
 	entries.MapWorkers = mapWorkers
+	stopProg := make(chan struct{}, 1)
+	totalCount := uint64(0)
+	processed := int64(0)
+	skipped := int64(0)
+	started := time.Now()
+	if progress {
+		totalCount, err = entries.Count()
+		if err != nil {
+			return err
+		}
+		_, err = entries.File.Seek(0, 0)
+		if err != nil {
+			return err
+		}
+		go func() {
+			for {
+				select {
+				case <-stopProg:
+					return
+				default:
+					proc := atomic.LoadInt64(&processed)
+					lps := float64(processed) / time.Since(started).Seconds()
+					fmt.Printf("\x1b[80D\x1b[2K")
+					fmt.Printf(
+						"%d/%d (%.2f%%, %.2f%% skipped, %.2f/s), eta: %s",
+						proc,
+						totalCount,
+						(float64(proc)/float64(totalCount))*100.0,
+						(float64(atomic.LoadInt64(&skipped))/float64(totalCount))*100.0,
+						lps,
+						time.Duration(float64(int64(totalCount)-processed)/lps)*time.Second,
+					)
+					time.Sleep(time.Millisecond * 250)
+				}
+			}
+		}()
+	}
 
 	cMu := new(sync.Mutex)
 	ctErrors := make(map[string]int)
 	xMu := new(sync.Mutex)
 	x509Errors := make(map[string]int)
 	entries.Map(func(ent *ct.EntryAndPosition, err error) {
+		if progress {
+			defer atomic.AddInt64(&processed, 1)
+		}
 		if err != nil {
 			if measureErrors {
 				cMu.Lock()
 				ctErrors[err.Error()]++
 				cMu.Unlock()
 			}
+			atomic.AddInt64(&skipped, 1)
 			return
 		}
 		// execute CT entry metric stuff (TODO!)
@@ -735,8 +776,10 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 				x509Errors[err.Error()]++
 				xMu.Unlock()
 			}
+			atomic.AddInt64(&skipped, 1)
 			return
 		} else if skip {
+			atomic.AddInt64(&skipped, 1)
 			return
 		}
 		// execute leaf metric generators
@@ -750,6 +793,10 @@ func Analyse(cacheFile string, filters []filter.Filter, generators []metricGener
 		}
 		wg.Wait()
 	})
+	if progress {
+		stopProg <- struct{}{}
+		fmt.Println("")
+	}
 
 	for _, g := range generators {
 		g.print()
